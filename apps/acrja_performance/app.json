@@ -1,0 +1,438 @@
+{
+  "id": "acrja_performance",
+  "title": "ACR Performance",
+  "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger",
+  "version": "0.9.5",
+  "vendor": "ACR Automobile",
+  "loggingId": "OAB1",
+  "iconGlyph": "gauge",
+  "signals": {
+    "de.bmw.infotainment.vehicle.CDS": {
+      "statusEngineSpeed2": "rs",
+      "statusEngineTemperature": "rs"
+    },
+    "de.bmw.infotainment.vehicle.CDS2": {
+      "statusLongitudinalAccelerationMassCenter": "rs",
+      "statusLateralAccelerationMassCenter": "rs"
+    },
+    "de.bmw.infotainment.vehicle.Vehicle2": {
+      "statusCarSpeed2": "rs"
+    },
+    "de.bmw.infotainment.drivingexcitement.FES": {
+      "statusActualValueTorque2": "rs",
+      "statusSwitchDriveDynamicSport2": "rs"
+    },
+    "de.bmw.infrastructure.VehicleInformation": {
+      "statusGearboxDrive": "s",
+      "DataPowerTrain2": "s"
+    },
+    "de.bmw.powertrain.AcceleratorPedal": {
+      "AngleAcceleratorPedal": "s"
+    },
+    "de.bmw.infrastructure.EnvironmentalInformation": {
+      "ExteriorTemperature": "s"
+    },
+    "com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu": {
+      "_instances": "SystemFunctionsInternalTasuInst1",
+      "_methods": [
+        "sendTasuRequest"
+      ],
+      "_broadcasts": [
+        "sendTasuResponse"
+      ]
+    }
+  },
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "ACR Performance",
+      "buttons": [
+        [
+          "BTN_ACTION",
+          "Start log"
+        ],
+        [
+          "BTN_PAGE",
+          "Next page"
+        ],
+        [
+          "BTN_EDIT",
+          "Edit tiles"
+        ],
+        [
+          "BTN_SETTINGS",
+          "Settings"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "units",
+      "label": "Units",
+      "type": "choice",
+      "default": "metric",
+      "options": [
+        [
+          "metric",
+          "Metric (km/h, °C, bar, Nm, kW)"
+        ],
+        [
+          "imperial",
+          "Imperial (mph, °F, psi, lb-ft, hp)"
+        ],
+        [
+          "custom",
+          "Custom (choose each below)"
+        ]
+      ]
+    },
+    {
+      "key": "speedUnit",
+      "label": "Speed unit (and distance: m / ft)",
+      "type": "choice",
+      "default": "kmh",
+      "options": [
+        [
+          "kmh",
+          "km/h"
+        ],
+        [
+          "mph",
+          "mph"
+        ]
+      ],
+      "when": {
+        "units": "custom"
+      }
+    },
+    {
+      "key": "tempUnit",
+      "label": "Temperature unit",
+      "type": "choice",
+      "default": "c",
+      "options": [
+        [
+          "c",
+          "Celsius"
+        ],
+        [
+          "f",
+          "Fahrenheit"
+        ]
+      ],
+      "when": {
+        "units": "custom"
+      }
+    },
+    {
+      "key": "powerUnit",
+      "label": "Power unit",
+      "type": "choice",
+      "default": "kw",
+      "options": [
+        [
+          "kw",
+          "kW"
+        ],
+        [
+          "hp",
+          "hp"
+        ]
+      ],
+      "when": {
+        "units": "custom"
+      }
+    },
+    {
+      "key": "boostUnit",
+      "label": "Boost unit",
+      "type": "choice",
+      "default": "bar",
+      "options": [
+        [
+          "bar",
+          "bar"
+        ],
+        [
+          "psi",
+          "psi"
+        ],
+        [
+          "kpa",
+          "kPa"
+        ]
+      ],
+      "when": {
+        "units": "custom"
+      }
+    },
+    {
+      "key": "torqueUnit",
+      "label": "Torque unit",
+      "type": "choice",
+      "default": "nm",
+      "options": [
+        [
+          "nm",
+          "Nm"
+        ],
+        [
+          "lbft",
+          "lb-ft"
+        ]
+      ],
+      "when": {
+        "units": "custom"
+      }
+    },
+    {
+      "key": "fuelUnit",
+      "label": "Fuel pressure unit",
+      "type": "choice",
+      "default": "bar",
+      "options": [
+        [
+          "bar",
+          "bar"
+        ],
+        [
+          "psi",
+          "psi"
+        ]
+      ],
+      "when": {
+        "units": "custom"
+      }
+    },
+    {
+      "key": "rpmMax",
+      "label": "Rev counter max",
+      "type": "number",
+      "unit": "rpm",
+      "default": 7000,
+      "steps": [
+        5000,
+        6000,
+        7000,
+        8000,
+        9000
+      ]
+    },
+    {
+      "key": "redline",
+      "label": "Redline",
+      "type": "number",
+      "unit": "rpm",
+      "default": 6500,
+      "steps": [
+        4500,
+        5000,
+        5500,
+        6000,
+        6500,
+        7000,
+        7500,
+        8000,
+        8500
+      ]
+    },
+    {
+      "key": "stoich",
+      "label": "Fuel (for AFR)",
+      "type": "choice",
+      "default": 14.7,
+      "options": [
+        [
+          14.7,
+          "Petrol (14.7)"
+        ],
+        [
+          14.1,
+          "E10 (14.1)"
+        ],
+        [
+          13.1,
+          "E30 (13.1)"
+        ],
+        [
+          9.8,
+          "E85 (9.8)"
+        ]
+      ]
+    },
+    {
+      "key": "engineData",
+      "label": "Engine unit values (boost, AFR, knock ...)",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        [
+          "on",
+          "Read them (read-only diagnostics)"
+        ],
+        [
+          "off",
+          "Off"
+        ]
+      ]
+    },
+    {
+      "key": "rollout",
+      "label": "Drag: one-foot rollout (as a strip's timer)",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "logUnits",
+      "label": "Log file units",
+      "type": "choice",
+      "default": "metric",
+      "options": [
+        [
+          "metric",
+          "Metric (one format for every file)"
+        ],
+        [
+          "screen",
+          "Same as the screen"
+        ]
+      ]
+    },
+    {
+      "key": "logRate",
+      "label": "Log rate",
+      "type": "number",
+      "unit": "Hz",
+      "default": 10,
+      "markDefault": true,
+      "steps": [
+        1,
+        2,
+        5,
+        10,
+        20
+      ]
+    },
+    {
+      "key": "autoLog",
+      "label": "Start logging by itself",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        [
+          "off",
+          "Off (Start log button)"
+        ],
+        [
+          "engine",
+          "When the engine runs"
+        ],
+        [
+          "moving",
+          "When the car moves"
+        ],
+        [
+          "runs",
+          "During drag runs and dyno pulls"
+        ]
+      ]
+    },
+    {
+      "key": "maxFiles",
+      "label": "Log files to keep",
+      "type": "number",
+      "default": 20,
+      "steps": [
+        5,
+        10,
+        20,
+        50,
+        100
+      ]
+    },
+    {
+      "key": "logDemo",
+      "label": "Log demo data too",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "theme",
+      "label": "Colour theme",
+      "type": "choice",
+      "default": "acr_signature",
+      "options": [
+        [
+          "acr_signature",
+          "ACR Signature"
+        ],
+        [
+          "acr_line",
+          "ACR Silver Line"
+        ],
+        [
+          "acr_edge",
+          "ACR Orange Edge"
+        ],
+        [
+          "acr_night",
+          "ACR Blue Night"
+        ]
+      ]
+    },
+    {
+      "key": "layout",
+      "label": "Screen layout",
+      "type": "choice",
+      "default": "full",
+      "options": [
+        [
+          "full",
+          "Full screen"
+        ],
+        [
+          "standard",
+          "Standard"
+        ]
+      ]
+    },
+    {
+      "key": "renderer",
+      "label": "Renderer",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "GPU 60 fps (default)"
+        ],
+        [
+          "software",
+          "Software"
+        ]
+      ]
+    },
+    {
+      "key": "demo",
+      "label": "Demo data",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "Auto"
+        ],
+        [
+          "on",
+          "Always"
+        ],
+        [
+          "off",
+          "Never"
+        ]
+      ]
+    }
+  ]
+}
