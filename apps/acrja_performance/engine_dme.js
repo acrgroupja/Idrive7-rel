@@ -14,7 +14,8 @@
  *     5889 lambda (5640), 5816 lambda target, 554C knock retard (mean of the cylinders)
  *   fast 2 (in turn with the first): 59FA ignition angle, 5927 wastegate position,
  *     4A49-4A4F ignition angle of cylinders 1-6 (one cylinder later than the others: knock control on it)
- *   fast 3: 4600 throttle plate angle (5858)
+ *   (from 0.9.8: 4201 moved to slow 2 and 4600 throttle plate (5858) into fast, which is asked twice as often as fast 2;
+ *   the slow groups every 3 s)
  *   slow (once a second): 4A36 knock detected, 4B23-4B32 misfire counters cylinders 1-6, 580F intake air;
  *     59D4 charge air temperature before the throttle
  *
@@ -63,11 +64,12 @@ const DIDS = {
 };
 /** The request groups (8 identifiers at most each): fast ones every round, in turn; slow ones once a second. */
 const GROUPS = [
-    { name: 'fast', ids: ['4205', '4201', '4AB0', '58EF', '5837', '5889', '5816', '554C'], fast: true },
-    { name: 'fast 2', ids: ['59FA', '5927', '4A49', '4A4A', '4A4C', '4A4D', '4A4E', '4A4F'], fast: true },
-    { name: 'fast 3', ids: ['4600'], fast: true },
+    // fast: asked twice as often as fast 2 (boost, fuel, lambda, knock, throttle are what the tiles watch)
+    { name: 'fast', ids: ['4205', '4AB0', '58EF', '5837', '5889', '5816', '554C', '4600'], fast: true, weight: 2 },
+    { name: 'fast 2', ids: ['59FA', '5927', '4A49', '4A4A', '4A4C', '4A4D', '4A4E', '4A4F'], fast: true, weight: 1 },
     { name: 'slow', ids: ['4A36', '4B23', '4B24', '4B25', '4B30', '4B31', '4B32', '580F'] },
-    { name: 'slow 2', ids: ['59D4'] },
+    // ambient pressure changes slowly: here, and kept for longer (boost is charge pressure minus it)
+    { name: 'slow 2', ids: ['59D4', '4201'] },
 ];
 const FAST = GROUPS[0].ids, SLOW = GROUPS[2].ids;
 /** What each identifier is, for the check page. */
@@ -83,7 +85,8 @@ const NAMES = {
 // RETRY_MS: an engine that answered none of its values is asked again after this. STALE_MS: a value older than
 // this counts as none. Gaps (the unit stops answering for a while): asked again after GAP_MIN_MS, doubling to GAP_MAX_MS,
 // keeping what it has; quiet for REPROBE_MS, it is asked which values it has again.
-const SLOW_MS = 1000, RETRY_MS = 10000, STALE_MS = 3000, MIN_ROUND_MS = 50, GAP_MIN_MS = 500, GAP_MAX_MS = 5000, REPROBE_MS = 60000;
+// (seen on a G-series car: one request takes about 200 ms over the head unit's link, so every request counts)
+const SLOW_MS = 3000, SLOW_STALE_MS = 10000, AMBIENT_STALE_MS = 120000, RETRY_MS = 10000, STALE_MS = 3000, MIN_ROUND_MS = 50, GAP_MIN_MS = 500, GAP_MAX_MS = 5000, REPROBE_MS = 60000;
 
 /** One identifier's raw bytes -> its value, or null (no data). */
 function decode(id, bytes) {
@@ -173,7 +176,7 @@ class EngineDme {
     /** The latest catalog values (older than 2 s count as none). */
     fresh() {
         const out = {}, now = Date.now();
-        Object.keys(this.raw).forEach((k) => { if (now - this.t[k] < STALE_MS) out[k] = this.raw[k]; });
+        Object.keys(this.raw).forEach((k) => { if (now - this.t[k] < staleMs(k)) out[k] = this.raw[k]; });
         return out;
     }
     _put(got, now) {
@@ -241,7 +244,7 @@ class EngineDme {
                 if (!have.length) { this.status = 'no answer'; this.log.info('engine unit: no answer to its values (another engine, or the ignition off?)'); continue; }
                 this.quietSince = null; this.gap = GAP_MIN_MS; this.lastReply = Date.now();
                 // each group: the identifiers it has (an alternative in its original's group)
-                this.groups = GROUPS.map((g) => ({ name: g.name, fast: !!g.fast, last: 0,
+                this.groups = GROUPS.map((g) => ({ name: g.name, fast: !!g.fast, weight: g.weight || 1, last: 0,
                     ids: have.filter((id) => g.ids.indexOf(id) >= 0 || g.ids.indexOf(alternativeOf(id)) >= 0) })).filter((g) => g.ids.length);
                 this.fast = [].concat.apply([], this.groups.filter((g) => g.fast).map((g) => g.ids));
                 this.slow = [].concat.apply([], this.groups.filter((g) => !g.fast).map((g) => g.ids));
@@ -251,7 +254,8 @@ class EngineDme {
             const now = Date.now(), fast = this.groups.filter((g) => g.fast);
             const before = this.lastReply;
             if (fast.length) {
-                const g = fast[turn++ % fast.length];                     // the fast groups in turn
+                const seq = [].concat.apply([], fast.map((x) => Array(x.weight || 1).fill(x)));   // by weight: fast, fast, fast 2, ...
+                const g = seq[turn++ % seq.length];
                 const got = await this._ask(g.ids);
                 if (got) { this._put(got, Date.now()); if (g === fast[0]) this.reads.push(Date.now()); }
             }
@@ -288,6 +292,10 @@ class EngineDme {
 /** The identifier whose alternative this one is ('5658' -> '58EF'). */
 function alternativeOf(id) { return Object.keys(DIDS).filter((k) => DIDS[k].alt === id)[0] || null; }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** How long a value counts as current: the fast ones 3 s, the slow ones 10 s, ambient pressure 2 minutes. */
+const SLOW_KEYS = {};
+GROUPS.filter((g) => !g.fast).forEach((g) => g.ids.forEach((id) => { SLOW_KEYS[DIDS[id].key] = true; if (DIDS[id].alt) SLOW_KEYS[DIDS[DIDS[id].alt].key] = true; }));
+function staleMs(key) { return key === 'ambientHpa' ? AMBIENT_STALE_MS : SLOW_KEYS[key] ? SLOW_STALE_MS : STALE_MS; }
 
 /** Demo values that follow the simulated drive (throttle 0..1, rpm). */
 function demoRaw(d, t) {

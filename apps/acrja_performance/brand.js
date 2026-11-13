@@ -10,7 +10,7 @@ const zlib = require('zlib');
 const { setImage } = require('./kit/record');
 const LOGO = require('./logo_data');
 
-const IMG = 7101, SPLASH_MS = 1500;
+const IMG = 7101, SPLASH_MS = 4000;
 let made = null;
 
 /** '#rrggbb' -> [r, g, b] ([0, 0, 0] for anything else). */

@@ -1,4 +1,4 @@
-# ACR Performance 0.9.7 (release)
+# ACR Performance 0.9.8 (release)
 
 ACR Automobile's iDrive 7 app, ready for the MGU Store. Cars install and update it from here:
 Store > Settings > Add source > `acrgroupja/idrive7-rel`, main branch (with a read-only token under Accounts).
