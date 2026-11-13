@@ -156,7 +156,7 @@ const PAIRS = {
     lambdaPair: { lo: 0.7, hi: 1.1, tol: 0.04, dir: 0, thr: 70, ct: 0, tsrc: 0, steps: { lo: [0.6, 0.7, 0.8, 0.9], hi: [1, 1.05, 1.1, 1.2], tol: [0.02, 0.03, 0.04, 0.05, 0.08, 0.1],
         dir: DIR, thr: THR, ct: [0, 0.75, 0.77, 0.78, 0.8, 0.82, 0.83, 0.85, 0.88, 0.92, 1], tsrc: TSRC } },
 };
-const LIMIT_KEYS = ['lo', 'hi', 'tol', 'dir', 'thr', 'ct', 'tsrc'];
+const LIMIT_KEYS = ['tol', 'dir', 'thr', 'ct', 'tsrc', 'lo', 'hi'];   // in the sheet: what decides the flashing first, the graph's range last
 const LIMIT_NAMES = { lo: 'Graph low', hi: 'Graph high', tol: 'Tolerance', dir: 'Flash when', thr: 'Watch from', ct: 'Custom target', tsrc: 'Use custom target' };
 /** A limit as text where it isn't a number in the value's unit (null: it is one). */
 function limitText(k, v) {

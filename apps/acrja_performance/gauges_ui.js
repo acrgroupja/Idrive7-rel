@@ -163,9 +163,12 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
         if (!G.isNum(p[1]) || !G.isNum(q[1])) continue;
         cv.quad([[m.X(p[0]), clampY(p[1] + tol)], [m.X(q[0]), clampY(q[1] + tol)], [m.X(q[0]), clampY(q[1] - tol)], [m.X(p[0]), clampY(p[1] - tol)]], withAlpha(t.text, 0.09));
     }
-    // the target, dashed
-    for (let i = 1; i < pb.length; i += 2) {
+    // the target, dashed: dashes fixed to the clock (0.4 s on, 0.4 s off), so they scroll with the line and don't blink
+    // (they were every other sample: each new sample swapped them all)
+    const t0 = ms / 1000;
+    for (let i = 1; i < pb.length; i++) {
         const p = pb[i - 1], q = pb[i];
+        if (Math.floor((t0 + p[0]) / 0.4) % 2) continue;
         if (G.isNum(p[1]) && G.isNum(q[1])) cv.line(m.X(p[0]), clampY(p[1]), m.X(q[0]), clampY(q[1]), 2, withAlpha(t.text, 0.75));
     }
     // the actual: red where it was outside the tolerance
@@ -272,7 +275,11 @@ function tileSheet(o) {
     const startAt = Math.max(0, values.map((v) => v.id).indexOf(o.current) + 1);
     return {
         title: o.title,
-        open: null, focus: startAt, sub: 0, controller: false, armedAt: 0,
+        // two views: 'values' (pick what the tile shows) and 'opts' (that value's targets, limits, flashing; the page).
+        // Picking a value with options goes on to them; 'Value' at the top of the options goes back to the list.
+        view: 'values', open: null, focus: startAt, sub: 0, controller: false, armedAt: 0,
+        nameOf(id) { const v = T.BY_ID[id]; return v ? v.name : 'Empty'; },
+        hasOpts() { return !!((o.limits && o.limits()) || (o.alarms && o.alarms())); },
         armed() { return Date.now() - this.armedAt < 5000; },
         extras() {
             const L = o.limits ? o.limits() : null, A = o.alarms ? o.alarms() : null;
@@ -292,11 +299,12 @@ function tileSheet(o) {
                 return o.limitSteps(k).map((v) => ({ label: o.fmtLimit(k, v), kind: 'radio', on: Math.abs(v - cur) < 1e-9 }));
             }
             if (this.open === LAYOUT) return T.LAYOUTS.map((l) => ({ label: l.name, value: l.slots.length + ' tiles', kind: 'radio', on: l.id === o.layout }));
+            if (this.view === 'opts') return [{ label: 'Value', value: this.nameOf(o.current), kind: 'more' }].concat(this.extras());
             return [{ label: 'Empty', kind: 'radio', on: o.current === null }]
                 .concat(values.map((v) => ({ label: v.name, value: o.reading(v.id), kind: 'radio', on: v.id === o.current })))
-                .concat(this.extras());
+                .concat([{ label: this.hasOpts() ? 'Targets, limits and page' : 'Page layout and pages', kind: 'more' }]);
         },
-        key() { return this.open ? (this.open.al ? 'tile:al:' + this.open.al : this.open.lim ? 'tile:lim:' + this.open.lim : 'tile:layouts') : 'tile:values'; },
+        key() { return this.open ? (this.open.al ? 'tile:al:' + this.open.al : this.open.lim ? 'tile:lim:' + this.open.lim : 'tile:layouts') : 'tile:' + this.view; },
         at() { return this.open ? this.sub : this.focus; },
         top() { return this.at() === -1; },
         draw(r, t) {
@@ -309,9 +317,10 @@ function tileSheet(o) {
                 pill(r, t, bx, by, bw, 56, 'Close', true);
                 return [{ x: bx, y: by, w: bw, h: 56, act: () => 'close' }];
             }
-            r.text(this.open ? (this.open.al ? T.ALARM_NAMES[this.open.al] : this.open.lim ? T.LIMIT_NAMES[this.open.lim] : 'Page layout') : o.title, 44, TOP + 40, 32, t.text, { font: 'bold' });
+            r.text(this.open ? (this.open.al ? T.ALARM_NAMES[this.open.al] : this.open.lim ? T.LIMIT_NAMES[this.open.lim] : 'Page layout')
+                : this.view === 'opts' ? o.title + ' · ' + this.nameOf(o.current) : o.title + ' · pick a value', 44, TOP + 40, 32, t.text, { font: 'bold' });
             const targets = [], bw = 150, bx = SW - 40 - bw, by = TOP + 8;
-            pill(r, t, bx, by, bw, 46, this.open ? 'Back' : 'Close', this.controller && this.at() === -1);
+            pill(r, t, bx, by, bw, 46, this.open ? 'Back' : this.view === 'opts' ? 'Done' : 'Close', this.controller && this.at() === -1);
             targets.push({ x: bx - 10, y: by - 6, w: bw + 20, h: 58, act: () => this.back() });
             list(r, t, this.key(), this.rows(), this.at(), TOP + 74, this.controller).forEach((q) => targets.push(Object.assign(q, {
                 act: () => { if (this.open) this.sub = q.i; else this.focus = q.i; return this.take(); },
@@ -346,9 +355,23 @@ function tileSheet(o) {
                 if (l) { o.setLayout(l.id); o.layout = l.id; }
                 return 'close';
             }
-            if (this.focus === 0) { o.choose(null); return 'close'; }
-            if (this.focus <= values.length) { o.choose(values[this.focus - 1].id); return 'close'; }
-            const x = this.extras()[this.focus - values.length - 1];
+            if (this.view === 'values') {
+                if (this.focus === 0) { o.choose(null); return 'close'; }
+                if (this.focus <= values.length) {
+                    const id = values[this.focus - 1].id;
+                    o.choose(id); o.current = id;
+                    if (!this.hasOpts()) return 'close';               // nothing to set for this value
+                    this.view = 'opts'; this.focus = 1;                 // on to its targets, limits, flashing
+                    return null;
+                }
+                this.view = 'opts'; this.focus = this.hasOpts() ? 1 : 0;  // the last row: the options as they are
+                return null;
+            }
+            if (this.focus === 0) {                                     // 'Value': back to the list
+                this.view = 'values'; this.focus = Math.max(0, values.map((v) => v.id).indexOf(o.current) + 1);
+                return null;
+            }
+            const x = this.extras()[this.focus - 1];
             if (!x) return null;
             if (x.id.indexOf('al:') === 0) {
                 const k = x.id.slice(3), st = o.alarmSteps(k), cur = o.alarms()[k];

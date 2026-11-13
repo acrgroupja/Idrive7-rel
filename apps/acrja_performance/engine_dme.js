@@ -59,6 +59,8 @@ const DIDS = {
     '4A4F': { key: 'tim6', bytes: 2, signed: true, k: 0.1 },
     '59D4': { key: 'chargeAirC', bytes: 2, k: 0.0234375, o: -273.15 },
     // the throttle plate (DK) angle from its lower stop, % (not the accelerator pedal: that comes from the car's own signal)
+    // the boost controller's error (target minus actual, catalog: Regeldifferenz Ladedruck): a cross-check of 4AB0
+    '4536': { key: 'boostErrHpa', bytes: 2, signed: true, k: 0.125 },
     '4600': { key: 'throttlePct', bytes: 2, signed: true, k: 0.0078125, alt: '5858' },
     '5858': { key: 'throttlePct', bytes: 2, signed: true, k: 0.0078125 },
 };
@@ -69,7 +71,7 @@ const GROUPS = [
     { name: 'fast 2', ids: ['59FA', '5927', '4A49', '4A4A', '4A4C', '4A4D', '4A4E', '4A4F'], fast: true, weight: 1 },
     { name: 'slow', ids: ['4A36', '4B23', '4B24', '4B25', '4B30', '4B31', '4B32', '580F'] },
     // ambient pressure changes slowly: here, and kept for longer (boost is charge pressure minus it)
-    { name: 'slow 2', ids: ['59D4', '4201'] },
+    { name: 'slow 2', ids: ['59D4', '4201', '4536'] },
 ];
 const FAST = GROUPS[0].ids, SLOW = GROUPS[2].ids;
 /** What each identifier is, for the check page. */
@@ -80,7 +82,7 @@ const NAMES = {
     '4B30': 'Misfires cyl 4', '4B31': 'Misfires cyl 5', '4B32': 'Misfires cyl 6', '580F': 'Intake air', '59FA': 'Ignition angle',
     '5927': 'Wastegate position', '4A49': 'Ignition cyl 1', '4A4A': 'Ignition cyl 2', '4A4C': 'Ignition cyl 3', '4A4D': 'Ignition cyl 4',
     '4A4E': 'Ignition cyl 5', '4A4F': 'Ignition cyl 6', '59D4': 'Charge air before throttle',
-    '4600': 'Throttle plate', '5858': 'Throttle plate (alt.)',
+    '4600': 'Throttle plate', '5858': 'Throttle plate (alt.)', '4536': 'Boost control error',
 };
 // RETRY_MS: an engine that answered none of its values is asked again after this. STALE_MS: a value older than
 // this counts as none. Gaps (the unit stops answering for a while): asked again after GAP_MIN_MS, doubling to GAP_MAX_MS,
@@ -132,6 +134,8 @@ function values(raw, stoich) {
     const tims = [1, 2, 3, 4, 5, 6].map((c) => n(raw['tim' + c])), timsGot = tims.filter((x) => x !== null);
     return {
         boost: over(raw.chargeHpa), boostTarget: over(raw.boostTargetHpa),
+        // the target the boost controller works to, from its error: actual + (target - actual); for the Check page
+        boostTargetCtl: n(raw.boostErrHpa) !== null ? over(n(raw.chargeHpa) !== null ? raw.chargeHpa + raw.boostErrHpa : null) : null,
         rail: n(raw.railMpa) !== null ? raw.railMpa * 10 : null, railTarget: n(raw.railTargetMpa) !== null ? raw.railTargetMpa * 10 : null,
         lambda: n(raw.lambda), lambdaTarget: n(raw.lambdaTarget),
         afr: n(raw.lambda) !== null ? raw.lambda * st : null, afrTarget: n(raw.lambdaTarget) !== null ? raw.lambdaTarget * st : null,
@@ -155,6 +159,8 @@ class EngineDme {
         this.raw = {}; this.t = {}; this.status = 'off'; this.have = null; this.fast = []; this.slow = [];
         this.running = false; this.lastSlow = 0; this.triedAt = 0; this.reads = []; this.rate = 0;
         // health, for the Check page: gaps (the unit went quiet and came back), request errors, loop restarts
+        this.fastMode = opts.fast || null;          // () => true: only the main group in turn (drag, dyno, logging ...)
+        this.latency = null;                     // ms a request takes (smoothed)
         this.lastReply = 0; this.quietSince = null; this.gap = GAP_MIN_MS; this.gaps = 0; this.errors = 0; this.restarts = 0; this.lastError = null;
     }
     start() {
@@ -172,20 +178,29 @@ class EngineDme {
     /** Ask which values the engine has again, now (the Check page's button). */
     reprobe() { this.have = null; this.triedAt = 0; this.status = 'off'; this.quietSince = null; this.gap = GAP_MIN_MS; if (this.link.wake) this.link.wake(DME); }
     /** For the Check page: gaps, request errors, restarts, the last error, ms since the last answer. */
-    health() { return { gaps: this.gaps, errors: this.errors, restarts: this.restarts, lastError: this.lastError, since: this.lastReply ? Date.now() - this.lastReply : null }; }
+    health() {
+        return { gaps: this.gaps, errors: this.errors, restarts: this.restarts, lastError: this.lastError, since: this.lastReply ? Date.now() - this.lastReply : null,
+            latency: this.latency, fast: this._fastNow() };
+    }
     /** The latest catalog values (older than 2 s count as none). */
     fresh() {
         const out = {}, now = Date.now();
-        Object.keys(this.raw).forEach((k) => { if (now - this.t[k] < staleMs(k)) out[k] = this.raw[k]; });
+        const fm = this._fastNow();
+        Object.keys(this.raw).forEach((k) => { if (now - this.t[k] < staleMs(k, fm)) out[k] = this.raw[k]; });
         return out;
     }
     _put(got, now) {
         Object.keys(got).forEach((id) => { const c = DIDS[id]; if (got[id] !== null) { this.raw[c.key] = got[id]; this.t[c.key] = now; } });
     }
     /** { id: value } for the identifiers it answered, or null (no answer, refused, or the request failed). */
+    _fastNow() { try { return !!(this.fastMode && this.fastMode()); } catch (e) { return false; } }
     async _ask(ids) {
         let uds;
-        try { uds = await this.link.readMany(DME, ids.map((x) => parseInt(x, 16))); } catch (e) {
+        const t0 = Date.now();
+        try {
+            uds = await this.link.readMany(DME, ids.map((x) => parseInt(x, 16)));
+            if (uds) { const dt = Date.now() - t0; this.latency = this.latency === null ? dt : this.latency * 0.9 + dt * 0.1; }
+        } catch (e) {
             // the transport refused the request (busy, restarting): count it, try again next round
             this.errors++; this.lastError = String(e && e.message || e);
             if (this.errors % 20 === 1) this.log.warn('engine unit: request failed (' + this.lastError + ')');
@@ -251,7 +266,9 @@ class EngineDme {
                 this.status = 'reading';
                 this.log.info('engine unit: reading ' + have.join(' '));
             }
-            const now = Date.now(), fast = this.groups.filter((g) => g.fast);
+            // fast mode: the main group only, in turn; the ignition group joins the slow ones (less often)
+            const fm = this._fastNow();
+            const now = Date.now(), fast = this.groups.filter((g) => g.fast && (!fm || g.weight >= 2));
             const before = this.lastReply;
             if (fast.length) {
                 const seq = [].concat.apply([], fast.map((x) => Array(x.weight || 1).fill(x)));   // by weight: fast, fast, fast 2, ...
@@ -259,8 +276,8 @@ class EngineDme {
                 const got = await this._ask(g.ids);
                 if (got) { this._put(got, Date.now()); if (g === fast[0]) this.reads.push(Date.now()); }
             }
-            for (const g of this.groups.filter((x) => !x.fast)) {
-                if (now - g.last < SLOW_MS) continue;
+            for (const g of this.groups.filter((x) => !x.fast || (fm && x.weight < 2))) {
+                if (now - g.last < (fm ? FAST_MODE_OTHERS_MS : SLOW_MS)) continue;
                 g.last = now;
                 const got = await this._ask(g.ids);
                 if (got) this._put(got, Date.now());
@@ -295,7 +312,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** How long a value counts as current: the fast ones 3 s, the slow ones 10 s, ambient pressure 2 minutes. */
 const SLOW_KEYS = {};
 GROUPS.filter((g) => !g.fast).forEach((g) => g.ids.forEach((id) => { SLOW_KEYS[DIDS[id].key] = true; if (DIDS[id].alt) SLOW_KEYS[DIDS[DIDS[id].alt].key] = true; }));
-function staleMs(key) { return key === 'ambientHpa' ? AMBIENT_STALE_MS : SLOW_KEYS[key] ? SLOW_STALE_MS : STALE_MS; }
+const MAIN_KEYS = {};
+GROUPS.filter((g) => g.weight === 2).forEach((g) => g.ids.forEach((id) => { MAIN_KEYS[DIDS[id].key] = true; if (DIDS[id].alt) MAIN_KEYS[DIDS[DIDS[id].alt].key] = true; }));
+/** Fast mode: only the main group is asked in turn; the rest every FAST_MODE_OTHERS_MS (and kept that long). */
+const FAST_MODE_OTHERS_MS = 5000, FAST_MODE_STALE_MS = 16000;
+function staleMs(key, fastMode) {
+    if (key === 'ambientHpa') return AMBIENT_STALE_MS;
+    if (fastMode && !MAIN_KEYS[key]) return FAST_MODE_STALE_MS;
+    return SLOW_KEYS[key] ? SLOW_STALE_MS : STALE_MS;
+}
 
 /** Demo values that follow the simulated drive (throttle 0..1, rpm). */
 function demoRaw(d, t) {

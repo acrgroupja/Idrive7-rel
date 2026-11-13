@@ -2,7 +2,7 @@
   "id": "acrja_performance",
   "title": "ACR Performance",
   "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -291,6 +291,26 @@
         [
           "off",
           "Off"
+        ]
+      ]
+    },
+    {
+      "key": "engineRate",
+      "label": "Engine values: how often",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "Auto · fast while logging, on Drag and Dyno"
+        ],
+        [
+          "fast",
+          "Fast · the main values only, the rest every 5 s"
+        ],
+        [
+          "balanced",
+          "Balanced · all values in turn"
         ]
       ]
     },

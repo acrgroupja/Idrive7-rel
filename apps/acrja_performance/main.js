@@ -89,7 +89,14 @@ mgu.run({
             aggDown: () => { tune.stepAggression(-0.5); refresh(); }, aggUp: () => { tune.stepAggression(0.5); refresh(); },
             burblesApply: tuneAct(() => tune.applyBurbles(false)), burblesOff: tuneAct(() => tune.applyBurbles(true)),
         };
-        const dme = new EDME.EngineDme({ link, log, wanted: () => settings.get('engineData') !== 'off' && !car.data().demo && !tune.busy &&
+        // fast mode (Settings > Engine values): the main group only, in turn: on, off, or Auto (logging, Drag, Dyno)
+        const fastMode = () => {
+            const m = settings.get('engineRate');
+            if (m === 'fast' || m === 'balanced') return m === 'fast';
+            const k = kindOf();
+            return logger.status().on || k === 'drag' || k === 'dyno' || (drag && drag.state === 'run') || (dyno && dyno.state === 'pull');
+        };
+        const dme = new EDME.EngineDme({ link, log, fast: fastMode, wanted: () => settings.get('engineData') !== 'off' && !car.data().demo && !tune.busy &&
             (ui.isVisible('MAIN') || logger.status().on || (drag && drag.state === 'run') || (dyno && dyno.state === 'pull')) });
         const misCount = new S.MisfireCount();
         // for the Check page: when each of the car's own signals last changed (demo data or not)
@@ -432,7 +439,8 @@ mgu.run({
                 }),
                 demo: car.data().demo, setting: settings.get('engineData'),
                 link: Object.assign({ ready: link.ready, available: link.available, error: link.error }, link.stats),
-                status: dme.status, rate: dme.rate, health: dme.health(), have: !!(dme.have && dme.have.length), report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
+                status: dme.status, rate: dme.rate, health: dme.health(),
+                cross: (() => { const e = EDME.values(dme.fresh(), settings.get('stoich')); return Object.assign({ stoich: settings.get('stoich') }, e); })(), have: !!(dme.have && dme.have.length), report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
             });
         }
         const kindOf = () => (isGauge() ? 'gauges' : modes()[page - pages.list.length]);
