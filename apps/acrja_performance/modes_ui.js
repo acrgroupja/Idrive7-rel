@@ -45,7 +45,7 @@ function drawDrag(cv, t, G, o) {
     LOGO.draw(cv, 'mark', 524 - 20 - LOGO.size('mark').w, 62);
     const label = run ? 'RUNNING' : st === 'ready' ? 'ARMED - GO' : 'STOP TO ARM';
     G.pill(cv, t, 44, 108, 220, 38, label, { color: run ? t.crit : st === 'ready' ? GO : t.dim, filled: run || st === 'ready' ? 0.25 : 0.08 });
-    if (drag.rollout) cv.text('1 ft rollout', 500, 134, 20, t.dim, { align: 'right' });
+    cv.text(drag.rollout ? '1 ft rollout' : 'No rollout', 500, 134, 20, t.dim, { align: 'right' });   // Settings: Drag: one-foot rollout
     const w = cv.text(f(drag.elapsed(now), 2), 44, 250, 104, run ? t.text : st === 'ready' ? t.dim : t.text, { font: 'num' });
     cv.text('s', 54 + w, 250, 30, t.dim);
     const dist = drag.distance();

@@ -1,8 +1,8 @@
 {
   "id": "acrja_performance",
   "title": "ACR Performance",
-  "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger",
-  "version": "0.9.5",
+  "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes",
+  "version": "0.9.6",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -279,6 +279,26 @@
       ]
     },
     {
+      "key": "tuner",
+      "label": "Tuning software (map switching)",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        [
+          "off",
+          "Off · nothing is sent to the car (safe)"
+        ],
+        [
+          "bm3",
+          "BM3 (bootmod3) · map, burbles, ASD"
+        ],
+        [
+          "mhd",
+          "MHD · map, Max Cooling"
+        ]
+      ]
+    },
+    {
       "key": "rollout",
       "label": "Drag: one-foot rollout (as a strip's timer)",
       "type": "bool",
@@ -434,5 +454,8 @@
         ]
       ]
     }
-  ]
+  ],
+  "config": {
+    "bm3MarkerAddress": "807FFE50"
+  }
 }

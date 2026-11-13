@@ -36,6 +36,10 @@ const { Drag } = require('./drag');
 const { Dyno } = require('./dyno');
 const { RunTimer } = require('./kit/run_timer');
 const { ReadOnlyDiag } = require('./kit/readonly-diag');
+const { TuneControl } = require('./tune');          // BM3 / MHD map switching (the kit's Live Adjustments commands)
+const { DiagLink } = require('./diaglink');
+const TUI = require('./tune_ui');
+const { MapNames, renameSheet } = require('./map_names');
 
 const W = 1600, H = 520;
 
@@ -59,7 +63,33 @@ mgu.run({
         const link = new ReadOnlyDiag(ctx.signals, log);
         link.init().catch((e) => log.warn('diagnostic link: ' + e));
         let dyno = null, drag = null;
-        const dme = new EDME.EngineDme({ link, log, wanted: () => settings.get('engineData') !== 'off' && !car.data().demo &&
+        // engine map switching for a BM3 or MHD tune (Settings > Tuning software). Off: no link, nothing sent, no Tune tab.
+        // A command only leaves on a press; the engine reads pause while one runs (one conversation with the DME at a time).
+        const tune = new TuneControl(ctx, { rpm: () => { const d = car.data(); return d.demo ? null : d.rpm; } });
+        let tuneLink = null, tunerWas = tune.tuner;
+        function startTune() {
+            if (!tune.armed) return tune.refresh().then(() => refresh());
+            if (tuneLink) return tune.refresh().then(() => refresh());
+            tuneLink = new DiagLink(ctx.signals, log);
+            return tuneLink.init()
+                .then(() => { tuneLink.onAvailable(() => tune.refresh().then(() => refresh())); return tune.start(tuneLink); })
+                .then(() => refresh()).catch((e) => log.warn('tune link: ' + (e && e.message || e)));
+        }
+        const tuneAct = (fn) => () => { const p = fn(); refresh(); return Promise.resolve(p).then(() => refresh()).catch((e) => log.warn('tune: ' + e)); };
+        const mapNames = new MapNames(path.join(ctx.dataDir, 'map_names.json'), log);
+        function openRename() {
+            const sh = renameSheet({ names: mapNames, start: tune.map || 1, locked: moving, onDone: () => refresh() });
+            if (!(ctx.sheet && ctx.sheet(sh))) log.info('rename maps: needs the full-screen renderer (touch)');
+            return null;
+        }
+        const tuneActs = {
+            rename: () => openRename(),
+            pick: (k) => { log.info('tune picked on the Tune page: ' + k); settings.set('tuner', k); return null; },
+            map: (k) => tuneAct(() => tune.setMap(k)), cooling: (on) => tuneAct(() => tune.setCooling(on)), asd: (on) => tuneAct(() => tune.setAsd(on)),
+            aggDown: () => { tune.stepAggression(-0.5); refresh(); }, aggUp: () => { tune.stepAggression(0.5); refresh(); },
+            burblesApply: tuneAct(() => tune.applyBurbles(false)), burblesOff: tuneAct(() => tune.applyBurbles(true)),
+        };
+        const dme = new EDME.EngineDme({ link, log, wanted: () => settings.get('engineData') !== 'off' && !car.data().demo && !tune.busy &&
             (ui.isVisible('MAIN') || logger.status().on || (drag && drag.state === 'run') || (dyno && dyno.state === 'pull')) });
         const misCount = new S.MisfireCount();
         // for the Check page: when each of the car's own signals last changed (demo data or not)
@@ -82,6 +112,8 @@ mgu.run({
             d.outside = d.demo ? 24 : ext.outside;
             d.dme = settings.get('engineData') === 'off' ? {} : EDME.values(d.demo ? EDME.demoRaw(d, now) : dme.fresh(), settings.get('stoich'));
             d.misfires = misCount.feed(d.dme.misfireTotal);
+            d.tuneMap = tune.armed ? tune.map : null;
+            d.tuneMapName = tune.armed && tune.map ? mapNames.get(tune.map) : '';
             return d;
         }
         const logger = new Logger({ dir: path.join(ctx.dataDir, 'logs'), columns: S.COLUMNS, maxFiles: settings.get('maxFiles'), log });
@@ -127,7 +159,10 @@ mgu.run({
             }, Math.round(1000 / hz));
         }
         startSampler();
-        settings.onChange(() => { startSampler(); logger.maxFiles = settings.get('maxFiles'); });
+        settings.onChange(() => {
+            startSampler(); logger.maxFiles = settings.get('maxFiles');
+            if (tune.tuner !== tunerWas) { tunerWas = tune.tuner; startTune(); }   // the Tune page follows the picked tune
+        });
         /* ---------- drag and dyno ---------- */
         // "During drag runs and dyno pulls": a log from the launch / the pull's start to its end
         const runLog = (on) => { if (settings.get('autoLog') !== 'runs') return; if (on) startLog(false); else setTimeout(stopLog, 2000); };
@@ -178,6 +213,8 @@ mgu.run({
         const alarms = {};
         const fmtLimit = (id, k, v) => {
             const u = unitsNow(), c = T.BY_ID[id];
+            const txt = T.limitText(k, v);
+            if (txt) return txt;
             return (k === 'tol' ? '± ' : '') + G.fmt(T.show(id, v, u), T.decOf(id, u) + (k === 'tol' && T.decOf(id, u) < 2 ? 1 : 0)) + ' ' + c.unit(u);
         };
         /** A tile's flash state: an actual-vs-target tile against its tolerance, a single value against its flash limits. */
@@ -186,8 +223,10 @@ mgu.run({
             if (!c) return null;
             const key = prefix + ':' + i + ':' + id;
             if (c.pair) {
+                // the target: the engine unit's, or the tile's custom one; watched only from the pedal % set (thr)
                 const lim = T.limitsOf(pg, i), al = alarms[key] || (alarms[key] = new T.Alarm());
-                return { lim, ms, flash: al.feed(now[c.pair[0]], now[c.pair[1]], lim.tol, ms) };
+                const tg = T.pairTarget(lim, now[c.pair[1]]), watch = !(lim.thr > 0) || (T.isNum(now.pedal) && now.pedal >= lim.thr);
+                return { lim, ms, target: tg.v, custom: tg.custom, watch, flash: al.feed(now[c.pair[0]], tg.v, lim.tol, ms, lim.dir, watch) };
             }
             const A = T.alarmsOf(pg, i);
             if (!A) return null;
@@ -220,7 +259,7 @@ mgu.run({
             const pg = pages.list[page], out = [];
             for (let i = 0; i < slots(); i++) {
                 out.push({ tile: i });
-                if (T.PAIRS[pg.tiles[i]]) T.LIMIT_KEYS.forEach((k) => out.push({ tile: i, lim: k }));
+                if (T.PAIRS[pg.tiles[i]]) T.LIMIT_KEYS.filter((k) => k in T.PAIRS[pg.tiles[i]]).forEach((k) => out.push({ tile: i, lim: k }));
                 const A = T.ALARMS[pg.tiles[i]];
                 if (A) T.ALARM_KEYS.forEach((k) => { if (k in A) out.push({ tile: i, al: k }); });
             }
@@ -369,12 +408,13 @@ mgu.run({
         }
 
         /* ---------- screen ---------- */
-        const MODES = ['drag', 'dyno', 'logger', 'files', 'check'];
+        const MODE_NAMES = { drag: 'Drag', dyno: 'Dyno', tune: 'Tune', logger: 'Logger', files: 'Files', check: 'Check' };
+        const modes = () => ['drag', 'dyno', 'tune', 'logger', 'files', 'check'];   // Tune: "pick your tune" while Off
         // the header: one tab for all gauge pages (which one: "Gauges 2/4"; the tab again: the next one), then
         // the modes. Few tabs, so the kit's own Settings tab after them always fits.
         let lastGauge = 0;
         const tabs = () => [pages.list.length > 1 ? 'Gauges ' + ((isGauge() ? page : Math.min(lastGauge, pages.list.length - 1)) + 1) + '/' + pages.list.length : 'Gauges']
-            .concat(['Drag', 'Dyno', 'Logger', 'Files', 'Check']);
+            .concat(modes().map((k) => MODE_NAMES[k]));
         const tabOf = () => (isGauge() ? 0 : page - pages.list.length + 1);
         function drawCheck(cv, t) {
             const now = Date.now();
@@ -391,7 +431,8 @@ mgu.run({
                 status: dme.status, rate: dme.rate, report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
             });
         }
-        const kindOf = () => (isGauge() ? 'gauges' : MODES[page - pages.list.length]);
+        const kindOf = () => (isGauge() ? 'gauges' : modes()[page - pages.list.length]);
+        const drawTunePage = (cv, t) => TUI.drawTune(cv, t, G, Object.assign(tune.view(), { names: (k) => mapNames.get(k) }), tuneActs);
         const drawMode = (cv, t) => {
             const o = { drag, dyno, d: data(), u: unitsNow(), now: Date.now(), history: dragHistory, view: dynoView, limitsFor: dynoLimits };
             if (kindOf() === 'drag') {
@@ -471,7 +512,7 @@ mgu.run({
          */
         function dynoLimits(id) {
             const c = T.BY_ID[id], i = pages.drag.tiles.indexOf(id), u = unitsNow();
-            if (c.pair) return i >= 0 ? T.limitsOf(pages.drag, i) : { lo: T.PAIRS[id].lo, hi: T.PAIRS[id].hi, tol: T.PAIRS[id].tol };
+            if (c.pair) return i >= 0 ? T.limitsOf(pages.drag, i) : T.pairDefaults(id);
             const A = i >= 0 ? T.alarmsOf(pages.drag, i) : T.ALARMS[id] ? { ahi: T.ALARMS[id].ahi, alo: T.ALARMS[id].alo } : {};
             const r = id === 'timing' ? [-5, 40] : c.range(u);            // (knock and timing read the same in any units)
             return Object.assign({ lo: r[0], hi: r[1] }, A || {});
@@ -481,7 +522,7 @@ mgu.run({
             const t = ctx.theme(), cv = ctx.canvas(W, H).clear(t.bg), st = logger.status();
             // the first moments: ACR's start-up screen (no tabs, no targets), then the pages
             if (BRAND.splashing()) { BRAND.drawSplash(cv, t); await ui.image('MAIN_GFX', cv); return; }
-            ({ gauges: drawGauges, drag: drawMode, dyno: drawMode, logger: drawLogger, files: drawFiles, check: drawCheck })[kindOf()](cv, t);
+            ({ gauges: drawGauges, drag: drawMode, dyno: drawMode, tune: drawTunePage, logger: drawLogger, files: drawFiles, check: drawCheck })[kindOf()](cv, t);
             G.frame(cv, t, tabs(), tabOf(), [st.on && { text: 'REC ' + S.duration(Date.now() - st.startedAt), color: 'crit' }, car.data().demo && { text: 'DEMO' }]);
             await ui.image('MAIN_GFX', cv);
         }
@@ -497,11 +538,12 @@ mgu.run({
             } else if (k === 'drag') a = dragHistory ? 'Live run' : 'Runs';
             else if (k === 'dyno') a = 'Older pull';
             else if (k === 'check') a = 'Ask engine again';
+            else if (k === 'tune') a = tune.armed ? 'Next map' : 'Pick in Settings';
             else a = k === 'files' ? (armed ? 'Yes, delete' : 'Delete all') : logger.status().on ? 'Stop log' : 'Start log';
             ui.text('BTN_ACTION', a);
             ui.text('BTN_PAGE', edit ? 'Next tile' : 'Next page');
-            ui.text('BTN_EDIT', k === 'drag' ? 'Panel: ' + VIEW_NAMES[dragView] : edit ? 'Done' : 'Edit tiles');
-            if (ui.visible) ui.visible('BTN_EDIT', k === 'gauges' || (k === 'drag' && !dragHistory));
+            ui.text('BTN_EDIT', k === 'drag' ? 'Panel: ' + VIEW_NAMES[dragView] : k === 'tune' ? 'Rename maps' : edit ? 'Done' : 'Edit tiles');
+            if (ui.visible) ui.visible('BTN_EDIT', k === 'gauges' || (k === 'tune' && tune.armed) || (k === 'drag' && !dragHistory));
         }
         function barDelete() {
             if (!armed) { armed = setTimeout(() => { armed = null; actionLabel(); }, 5000); return actionLabel(); }
@@ -509,11 +551,12 @@ mgu.run({
             return deleteAll();
         }
         function refresh() { actionLabel(); return render().catch((e) => log.warn('render: ' + e)); }
-        const n = () => pages.list.length + MODES.length;
+        const n = () => pages.list.length + modes().length;
         const go = (p) => { edit = null; page = (p + n()) % n(); if (isGauge()) lastGauge = page; return refresh(); };
         ui.onClick('BTN_PAGE', () => (edit ? nextTile() : go(page + 1)));
         ui.onClick('BTN_EDIT', () => {
             if (kindOf() === 'drag') return cycleDragView();
+            if (kindOf() === 'tune') return tune.armed ? openRename() : null;
             return edit ? endEdit() : isGauge() && !locked() && startEdit(0);
         });
         ctx.onTab((i) => {
@@ -531,10 +574,12 @@ mgu.run({
             if (k === 'files') return barDelete();
             if (k === 'drag') { dragHistory = !dragHistory; return refresh(); }
             if (k === 'dyno') return olderPull();
+            if (k === 'tune') return tune.armed ? tuneAct(() => tune.setMap(((tune.map || 0) % 4) + 1))() : null;
             if (k === 'check') { dme.reprobe(); log.info('engine unit: asked again (Check page)'); return refresh(); }
             return toggleLog();
         });
         G.onConfirm(() => render().catch(() => {}));
+        startTune();                            // nothing at all while Tuning software is Off
         ctx.loop('MAIN', 10, render);
         refresh().then(() => log.info('first frame done'));
         setTimeout(() => refresh(), BRAND.SPLASH_MS + 50);      // the pages after the start-up screen (also without the loop running)

@@ -123,13 +123,23 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
     G.panel(cv, t, b.x, b.y, b.w, b.h, null);
     if (blink) cv.roundRect(b.x, b.y, b.w, b.h, 6, withAlpha(t.crit, 0.42));
     if (flash) cv.strokeRoundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 6, 4, t.crit);
-    const a = now[A], tg = now[B], dv = G.isNum(a) && G.isNum(tg) ? sh(a) - sh(tg) : null;
+    const a = now[A], tg = 'target' in pair ? pair.target : now[B], dv = G.isNum(a) && G.isNum(tg) ? sh(a) - sh(tg) : null;
+    const dir = lim.dir || 0, watch = pair.watch !== false;
     // the name, then actual (big) / target and the difference on the row under it
     const small = b.h < 200, big = small ? 34 : Math.min(64, Math.round(b.h * 0.2)), sz2 = small ? 17 : 24;
-    cv.text(c.name, b.x + 18, b.y + (small ? 30 : 36), small ? 18 : 24, t.text, { font: 'bold' });
+    const nw = cv.text(c.name, b.x + 18, b.y + (small ? 30 : 36), small ? 18 : 24, t.text, { font: 'bold' });
+    // what changes the flashing, top right when it fits: below the pedal % (not watched), a custom target, one side only
+    const room = b.w - 14 - 18 - nw - 16;
+    let tags = [lim.thr > 0 && !watch ? 'pedal < ' + lim.thr + '%' : '', pair.custom ? 'custom target' : '', dir < 0 ? 'under only' : dir > 0 ? 'over only' : ''].filter(Boolean).join(' · ');
+    if (tags && cv.textWidth(tags, 15, { font: 'label' }) > room) {      // a narrow tile: the short words
+        tags = [lim.thr > 0 && !watch ? '<' + lim.thr + '%' : '', pair.custom ? 'custom' : '', dir < 0 ? 'under' : dir > 0 ? 'over' : ''].filter(Boolean).join(' · ');
+    }
+    if (tags && cv.textWidth(tags, 15, { font: 'label' }) <= room) {
+        cv.text(tags, b.x + b.w - 14, b.y + (small ? 30 : 36), 15, lim.thr > 0 && !watch ? t.dim : t.accent2 || t.dim, { align: 'right', font: 'label' });
+    }
     const ny = small ? b.y + 66 : b.y + 54 + big * 0.8, nx = b.x + 18;
     const at = G.fmt(G.isNum(a) ? sh(a) : null, dec);
-    const rest = ' / ' + G.fmt(G.isNum(tg) ? sh(tg) : null, dec) + ' ' + unit;
+    const rest = ' / ' + G.fmt(G.isNum(tg) ? sh(tg) : null, dec) + (pair.custom ? '*' : '') + ' ' + unit;
     const dtx = G.isNum(dv) ? '  diff ' + (dv > 0 ? '+' : '') + dv.toFixed(dec) : '';       // (the car's fonts have no delta sign)
     const w1 = cv.text(at, nx, ny, big, flash ? t.crit : t.text, { font: 'num' });
     const w2 = cv.text(rest, nx + w1, ny, sz2, t.dim);
@@ -142,7 +152,9 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
     const m = G.chart(cv, t, b.x + 8, gy, b.w - 16, gh, { xMin: -PAIR_S, xMax: 0, yMin: lo, yMax: hi, xStep: 10, yStep: ys,
         xFmt: (v) => (small ? '' : v ? String(-v) : 'now'), padLeft: 44, padBottom: small ? 4 : 22, padTop: small ? 4 : 8, marks: [], series: [] });
     const pa = hist.series(A, ms).filter((p) => p[0] >= -PAIR_S).map((p) => [p[0], G.isNum(p[1]) ? sh(p[1]) : null]);
-    const pb = hist.series(B, ms).filter((p) => p[0] >= -PAIR_S).map((p) => [p[0], G.isNum(p[1]) ? sh(p[1]) : null]);
+    // the target line: the engine unit's history, or the custom target (flat) when that is the one compared with
+    const pb = pair.custom ? pa.map((p) => [p[0], sh(pair.target)])
+        : hist.series(B, ms).filter((p) => p[0] >= -PAIR_S).map((p) => [p[0], G.isNum(p[1]) ? sh(p[1]) : null]);
     const clampY = (v) => m.Y(Math.max(lo, Math.min(hi, v)));
     cv.clip(m.px, m.py - 2, m.pw, m.ph + 4);
     // the tolerance band round the target
@@ -160,7 +172,7 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
     for (let i = 1; i < pa.length; i++) {
         const p = pa[i - 1], q = pa[i], tq = pb[i] && pb[i][1];
         if (!G.isNum(p[1]) || !G.isNum(q[1])) continue;
-        const out = G.isNum(tq) && Math.abs(q[1] - tq) > tol;
+        const out = watch && T.outOfTol(q[1], tq, tol, dir);
         cv.line(m.X(p[0]), clampY(p[1]), m.X(q[0]), clampY(q[1]), 3, out ? t.crit : t.accent2 || t.accent);
     }
     cv.noclip();
@@ -176,12 +188,15 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
  */
 function drawCurveTile(cv, t, G, b, u, o) {
     const c = T.BY_ID[o.id], sh = (v) => T.show(o.id, v, u), dec = T.decOf(o.id, u), unit = c.unit ? c.unit(u) : '';
-    const xs = o.xs || [], A = o.a || [], B = o.b || null, n = xs.length;
+    const xs = o.xs || [], A = o.a || [], n = xs.length;
     const isN = G.isNum;
+    // a pair's target: the recorded one, or its custom target (when set: where the engine gave none, or always)
+    let B = o.b || null;
+    if (B && o.ct > 0) B = B.map((v) => (o.tsrc === 1 || !isN(v) ? o.ct : v));
     const outAt = (j) => {
         const a = A[j];
         if (!isN(a)) return false;
-        if (B && isN(o.tol)) return isN(B[j]) && Math.abs(a - B[j]) > o.tol;
+        if (B && isN(o.tol)) return T.outOfTol(a, B[j], o.tol, o.dir || 0);
         return (isN(o.ahi) && a > o.ahi) || (isN(o.alo) && a < o.alo);
     };
     let anyOut = false;
@@ -261,7 +276,7 @@ function tileSheet(o) {
         armed() { return Date.now() - this.armedAt < 5000; },
         extras() {
             const L = o.limits ? o.limits() : null, A = o.alarms ? o.alarms() : null;
-            return (L ? T.LIMIT_KEYS.map((k) => ({ id: 'lim:' + k, label: T.LIMIT_NAMES[k], value: o.fmtLimit(k, L[k]), kind: 'more' })) : [])
+            return (L ? T.LIMIT_KEYS.filter((k) => k in L).map((k) => ({ id: 'lim:' + k, label: T.LIMIT_NAMES[k], value: o.fmtLimit(k, L[k]), kind: 'more' })) : [])
                 .concat(A ? T.ALARM_KEYS.filter((k) => k in A).map((k) => ({ id: 'al:' + k, label: T.ALARM_NAMES[k], value: A[k] === null ? 'Off' : o.fmtLimit(k, A[k]), kind: 'more' })) : [])
                 .concat(o.layout ? [{ id: LAYOUT, label: 'Page layout', value: T.layout(o.layout).name, kind: 'more' }] : [])
                 .concat(o.add ? [{ id: 'add', label: 'Add a gauge page' }] : [])

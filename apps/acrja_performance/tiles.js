@@ -143,21 +143,47 @@ function gearText(g) { return g === -1 ? 'R' : g === 0 ? 'N' : isNum(g) && g > 0
  * lo / hi = the graph's range, tol = how far actual may be from target before the tile flashes.
  * The choices offered for each, and what a new tile starts with.
  */
+// also: dir = which side flashes (0 both, -1 under target only, 1 over target only); thr = flash only with the accelerator
+// pedal at or above this % (0: always); AFR / lambda: ct = a custom target (0: off), tsrc = when it is used (0: when the
+// engine unit gives no target, 1: always, in place of the engine unit's)
+const DIR = [0, -1, 1], THR = [0, 25, 40, 50, 60, 70, 80, 90], TSRC = [0, 1];
 const PAIRS = {
-    boostPair: { lo: 0, hi: 2, tol: 0.15, steps: { lo: [-1, -0.5, 0, 0.5], hi: [1, 1.5, 2, 2.5, 3, 3.5], tol: [0.05, 0.1, 0.15, 0.2, 0.3, 0.5] } },
-    railPair: { lo: 0, hi: 400, tol: 25, steps: { lo: [0, 50, 100, 150, 200], hi: [200, 250, 300, 350, 400, 500], tol: [10, 15, 20, 25, 35, 50] } },
-    afrPair: { lo: 10, hi: 16, tol: 0.6, steps: { lo: [8, 9, 10, 11, 12], hi: [13, 14, 15, 16, 17], tol: [0.2, 0.3, 0.4, 0.6, 0.8, 1, 1.5] } },
-    lambdaPair: { lo: 0.7, hi: 1.1, tol: 0.04, steps: { lo: [0.6, 0.7, 0.8, 0.9], hi: [1, 1.05, 1.1, 1.2], tol: [0.02, 0.03, 0.04, 0.05, 0.08, 0.1] } },
+    boostPair: { lo: 0, hi: 2, tol: 0.15, dir: 0, thr: 0, steps: { lo: [-1, -0.5, 0, 0.5], hi: [1, 1.5, 2, 2.5, 3, 3.5], tol: [0.05, 0.1, 0.15, 0.2, 0.3, 0.5], dir: DIR, thr: THR } },
+    railPair: { lo: 0, hi: 400, tol: 25, dir: 0, thr: 0, steps: { lo: [0, 50, 100, 150, 200], hi: [200, 250, 300, 350, 400, 500], tol: [10, 15, 20, 25, 35, 50], dir: DIR, thr: THR } },
+    afrPair: { lo: 10, hi: 16, tol: 0.6, dir: 0, thr: 70, ct: 0, tsrc: 0, steps: { lo: [8, 9, 10, 11, 12], hi: [13, 14, 15, 16, 17], tol: [0.2, 0.3, 0.4, 0.6, 0.8, 1, 1.5],
+        dir: DIR, thr: THR, ct: [0, 11, 11.3, 11.5, 11.8, 12, 12.2, 12.5, 13, 13.5, 14.7], tsrc: TSRC } },
+    lambdaPair: { lo: 0.7, hi: 1.1, tol: 0.04, dir: 0, thr: 70, ct: 0, tsrc: 0, steps: { lo: [0.6, 0.7, 0.8, 0.9], hi: [1, 1.05, 1.1, 1.2], tol: [0.02, 0.03, 0.04, 0.05, 0.08, 0.1],
+        dir: DIR, thr: THR, ct: [0, 0.75, 0.77, 0.78, 0.8, 0.82, 0.83, 0.85, 0.88, 0.92, 1], tsrc: TSRC } },
 };
-const LIMIT_KEYS = ['lo', 'hi', 'tol'];
-const LIMIT_NAMES = { lo: 'Graph low', hi: 'Graph high', tol: 'Tolerance' };
+const LIMIT_KEYS = ['lo', 'hi', 'tol', 'dir', 'thr', 'ct', 'tsrc'];
+const LIMIT_NAMES = { lo: 'Graph low', hi: 'Graph high', tol: 'Tolerance', dir: 'Flash when', thr: 'Watch from pedal', ct: 'Custom target', tsrc: 'Use custom target' };
+/** A limit as text where it isn't a number in the value's unit (null: it is one). */
+function limitText(k, v) {
+    if (k === 'dir') return v < 0 ? 'Under target only' : v > 0 ? 'Over target only' : 'Under or over';
+    if (k === 'thr') return v > 0 ? v + ' % pedal and up' : 'Always';
+    if (k === 'ct' && !(v > 0)) return 'Off';
+    if (k === 'tsrc') return v === 1 ? 'Always (ignore the engine)' : 'When the engine gives none';
+    return null;
+}
+/** The target an actual-vs-target tile compares with: the engine unit's, or the custom one. { v, custom } */
+function pairTarget(lim, engine) {
+    if (lim && lim.ct > 0 && (lim.tsrc === 1 || !isNum(engine))) return { v: lim.ct, custom: true };
+    return { v: isNum(engine) ? engine : null, custom: false };
+}
+/** Out of tolerance on the side that counts: dir 0 either, -1 under (a < target - tol), 1 over. */
+function outOfTol(a, tg, tol, dir) {
+    if (!isNum(a) || !isNum(tg) || !isNum(tol)) return false;
+    return dir < 0 ? a < tg - tol : dir > 0 ? a > tg + tol : Math.abs(a - tg) > tol;
+}
+/** A pair's defaults (its limits with nothing saved). */
+function pairDefaults(id) { return limitsOf({ tiles: [id], cfg: {} }, 0); }
 /** A tile's limits: the page's saved ones over the defaults; null for a tile that is no pair. */
 function limitsOf(pg, i) {
     const id = pg && pg.tiles[i], P = PAIRS[id];
     if (!P) return null;
     const c = (pg.cfg && pg.cfg[i]) || {};
-    const out = { lo: P.lo, hi: P.hi, tol: P.tol };
-    LIMIT_KEYS.forEach((k) => { if (isNum(c[k])) out[k] = c[k]; });
+    const out = {};
+    LIMIT_KEYS.forEach((k) => { if (k in P) out[k] = isNum(c[k]) ? c[k] : P[k]; });
     if (out.hi <= out.lo) out.hi = P.steps.hi.filter((x) => x > out.lo)[0] || out.lo + 1;
     return out;
 }
@@ -175,7 +201,7 @@ class Alarm {
         this.outSince = null; this.inSince = null; this.on = false;
         this.holdIn = opts && isNum(opts.holdIn) ? opts.holdIn : HOLD_IN; this.holdOut = opts && isNum(opts.holdOut) ? opts.holdOut : HOLD_OUT;
     }
-    feed(a, b, tol, now) { return this.step(isNum(a) && isNum(b) && isNum(tol) && Math.abs(a - b) > tol, now); }
+    feed(a, b, tol, now, dir, watch) { return this.step(watch !== false && outOfTol(a, b, tol, dir || 0), now); }
     /** A single value against its flash limits (null: that side off). */
     feedLimits(v, hi, lo, now) { return this.step(isNum(v) && ((isNum(hi) && v > hi) || (isNum(lo) && v < lo)), now); }
     step(out, now) {
@@ -315,7 +341,7 @@ class Pages {
     setLimit(p, i, k, v) {
         const pg = this.page(p), id = pg && pg.tiles[i];
         if (!pg) return false;
-        const pairOk = PAIRS[id] && LIMIT_KEYS.indexOf(k) >= 0 && isNum(v);
+        const pairOk = PAIRS[id] && LIMIT_KEYS.indexOf(k) >= 0 && (k in PAIRS[id]) && isNum(v);
         const alarmOk = ALARMS[id] && ALARM_KEYS.indexOf(k) >= 0 && (k in ALARMS[id]) && (isNum(v) || v === null);
         if (!pairOk && !alarmOk) return false;
         pg.cfg = pg.cfg || {};
@@ -339,4 +365,4 @@ class Pages {
     }
 }
 
-module.exports = { ALARMS, ALARM_KEYS, ALARM_NAMES, alarmsOf, DRAG_DEFAULT, SYSTEMS, resolveUnits, CONV, conv, unitOf, PAIRS, LIMIT_KEYS, LIMIT_NAMES, limitsOf, Alarm, decOf, VALUES, BY_ID, LAYOUTS, MAX_PAGES, MAX_SLOTS, DEFAULTS, layout, nextLayout, readAll, show, gearText, powerKw, Pages, isNum };
+module.exports = { limitText, pairTarget, outOfTol, pairDefaults, ALARMS, ALARM_KEYS, ALARM_NAMES, alarmsOf, DRAG_DEFAULT, SYSTEMS, resolveUnits, CONV, conv, unitOf, PAIRS, LIMIT_KEYS, LIMIT_NAMES, limitsOf, Alarm, decOf, VALUES, BY_ID, LAYOUTS, MAX_PAGES, MAX_SLOTS, DEFAULTS, layout, nextLayout, readAll, show, gearText, powerKw, Pages, isNum };

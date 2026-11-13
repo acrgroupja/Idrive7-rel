@@ -50,6 +50,8 @@ const COLUMNS = [
     { key: 'tim6', title: 'timing_cyl6_deg', dec: 1 },
     { key: 'wastegate', title: 'wastegate_pct', dec: 0 },
     { key: 'outside', title: 'outside_c', dec: 1 },
+    { key: 'map', title: 'tune_map', dec: 0 },       // the BM3 / MHD map last confirmed or accepted (Tuning software)
+    { key: 'mapName', title: 'tune_map_name' },       // its name on the Tune page (Rename maps), or empty
 ];
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
@@ -98,7 +100,7 @@ function rowIn(r, u) {
 function row(d) {
     const e = d.dme || {}, mis = e.misfires || [], tim = e.timingCyl || [];
     return { rpm: d.rpm, speed: d.speed, coolant: d.coolant, oil: d.oil, torque: d.torque, power: powerKw(d.torque, d.rpm),
-        gear: gearText(d.gear), gLong: d.gLong, gLat: d.gLat, pedal: d.pedal, outside: d.outside,
+        gear: gearText(d.gear), gLong: d.gLong, gLat: d.gLat, pedal: d.pedal, outside: d.outside, map: d.tuneMap, mapName: d.tuneMapName,
         boost: e.boost, boostTarget: e.boostTarget, rail: e.rail, railTarget: e.railTarget, lambda: e.lambda, lambdaTarget: e.lambdaTarget,
         afr: e.afr, knock: e.knock, knockFlag: e.knockFlag, misfireTotal: e.misfireTotal, intake: e.intake,
         chargeAir: e.chargeAir, timing: e.timing, wastegate: e.wastegate,
