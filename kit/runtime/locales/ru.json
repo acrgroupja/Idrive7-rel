@@ -1169,6 +1169,7 @@
   "up": "вверх",
   "m ago": "мин назад",
   "Language": "Язык",
+  "The car standing still (light show)": "Автомобиль стоит (световое шоу)",
   "Per-shift map summary": "Сводка карты переключений",
   "Next item: next pack": "Следующий пункт: следующий пакет",
   "Next item: next temperature": "Следующий пункт: следующая температура",
@@ -1820,5 +1821,9 @@
   "Hybrid Eco Pro": "Гибрид Эко Про",
   "Hybrid": "Гибрид",
   "Electric": "Электро",
-  "Give the HUD back to Cluster functions at switch-off": "Возвращать HUD приложению Cluster functions при выключении"
+  "Give the HUD back to Cluster functions at switch-off": "Возвращать HUD приложению Cluster functions при выключении",
+  "Hybrid Eco": "Гибрид Эко",
+  "Hybrid Comfort": "Гибрид Комфорт",
+  "Electric Individual": "Электро индивидуальный",
+  "Sport Boost": "Спорт Буст"
 }

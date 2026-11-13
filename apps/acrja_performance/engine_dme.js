@@ -61,6 +61,12 @@ const DIDS = {
     // the throttle plate (DK) angle from its lower stop, % (not the accelerator pedal: that comes from the car's own signal)
     // the boost controller's error (target minus actual, catalog: Regeldifferenz Ladedruck): a cross-check of 4AB0
     '4536': { key: 'boostErrHpa', bytes: 2, signed: true, k: 0.125 },
+    // fuel quality (catalog: FAK_KRAFTSTOFFQUALITAET_ADAPT, 0 = RON 98 .. 1 = RON 91; TIME_FROM_LST_INST, min)
+    // ethanol in the fuel, % (catalog: PROZENT_ALK_KRST; a flex-fuel tune may fill it from its sensor). Where the engine
+    // unit refuses it: OBD-II PID 52 (ethanol fuel %), asked with the slow values
+    '550D': { key: 'ethanolPct', bytes: 1, k: 0.39215686 },
+    '5776': { key: 'fuelQualityFactor', bytes: 1, k: 0.00390625 },
+    '57E3': { key: 'sinceRefuelMin', bytes: 2 },
     '4600': { key: 'throttlePct', bytes: 2, signed: true, k: 0.0078125, alt: '5858' },
     '5858': { key: 'throttlePct', bytes: 2, signed: true, k: 0.0078125 },
 };
@@ -71,7 +77,7 @@ const GROUPS = [
     { name: 'fast 2', ids: ['59FA', '5927', '4A49', '4A4A', '4A4C', '4A4D', '4A4E', '4A4F'], fast: true, weight: 1 },
     { name: 'slow', ids: ['4A36', '4B23', '4B24', '4B25', '4B30', '4B31', '4B32', '580F'] },
     // ambient pressure changes slowly: here, and kept for longer (boost is charge pressure minus it)
-    { name: 'slow 2', ids: ['59D4', '4201', '4536'] },
+    { name: 'slow 2', ids: ['59D4', '4201', '4536', '5776', '57E3', '550D'] },
 ];
 const FAST = GROUPS[0].ids, SLOW = GROUPS[2].ids;
 /** What each identifier is, for the check page. */
@@ -83,6 +89,7 @@ const NAMES = {
     '5927': 'Wastegate position', '4A49': 'Ignition cyl 1', '4A4A': 'Ignition cyl 2', '4A4C': 'Ignition cyl 3', '4A4D': 'Ignition cyl 4',
     '4A4E': 'Ignition cyl 5', '4A4F': 'Ignition cyl 6', '59D4': 'Charge air before throttle',
     '4600': 'Throttle plate', '5858': 'Throttle plate (alt.)', '4536': 'Boost control error',
+    '550D': 'Ethanol in the fuel', '5776': 'Fuel quality (adapted)', '57E3': 'Since refuelling',
 };
 // RETRY_MS: an engine that answered none of its values is asked again after this. STALE_MS: a value older than
 // this counts as none. Gaps (the unit stops answering for a while): asked again after GAP_MIN_MS, doubling to GAP_MAX_MS,
@@ -124,6 +131,18 @@ function parse(uds, ids) {
  * The engine values in display terms from the catalog values (by key): boost / target in bar over
  * ambient, rail in bar, lambda, AFR (x stoich), knock, misfires per cylinder and their total.
  */
+/**
+ * KQE (22 4035, DME8FF_R): refuellings the engine unit counted as low / medium / high quality, then the last five
+ * refuellings' mileage (x 8 km) and quality range (1 low, 2 medium, 3 high; 0: none yet).
+ * { low, medium, high, last: [{ km, q }] } from the reply (62 40 35 + 21 bytes), or null.
+ */
+function parseKqe(u) {
+    if (!u || u[0] !== 0x62 || u[1] !== 0x40 || u[2] !== 0x35 || u.length < 3 + 21) return null;
+    const d = u.slice(3), w = (i) => (d[i] << 8) | d[i + 1];
+    const last = [0, 1, 2, 3, 4].map((n) => ({ km: w(6 + n * 3) * 8, q: d[8 + n * 3] }));
+    return { low: w(0), medium: w(2), high: w(4), last };
+}
+
 function values(raw, stoich) {
     const n = (x) => (typeof x === 'number' && isFinite(x) ? x : null);
     const amb = n(raw.ambientHpa);
@@ -141,6 +160,10 @@ function values(raw, stoich) {
         afr: n(raw.lambda) !== null ? raw.lambda * st : null, afrTarget: n(raw.lambdaTarget) !== null ? raw.lambdaTarget * st : null,
         knock: n(raw.knockRetard), knockFlag: n(raw.knockFlag), misfires: mis, misfireTotal: got.length ? got.reduce((a, b) => a + b, 0) : null,
         intake: n(raw.intakeC), chargeAir: n(raw.chargeAirC), wastegate: n(raw.wastegate),
+        // adapted octane: the engine unit's fuel quality factor on its scale, 0 = RON 98 .. 1 = RON 91
+        octane: n(raw.fuelQualityFactor) !== null ? 98 - 7 * Math.max(0, Math.min(1, raw.fuelQualityFactor)) : null,
+        sinceRefuel: n(raw.sinceRefuelMin),
+        ethanol: n(raw.ethanolPct) !== null ? Math.max(0, Math.min(100, raw.ethanolPct)) : null,
         throttle: n(raw.throttlePct) !== null ? Math.max(0, Math.min(100, raw.throttlePct)) : null,
         timing: n(raw.timing), timingCyl: tims, timingSpread: timsGot.length >= 2 ? Math.max.apply(null, timsGot) - Math.min.apply(null, timsGot) : null,
     };
@@ -176,7 +199,7 @@ class EngineDme {
     }
     stop() { this.running = false; }
     /** Ask which values the engine has again, now (the Check page's button). */
-    reprobe() { this.have = null; this.triedAt = 0; this.status = 'off'; this.quietSince = null; this.gap = GAP_MIN_MS; if (this.link.wake) this.link.wake(DME); }
+    reprobe() { this.obdEthanol = undefined; this.obdMiss = 0; this.ethanolFrom = null; this.have = null; this.triedAt = 0; this.status = 'off'; this.quietSince = null; this.gap = GAP_MIN_MS; if (this.link.wake) this.link.wake(DME); }
     /** For the Check page: gaps, request errors, restarts, the last error, ms since the last answer. */
     health() {
         return { gaps: this.gaps, errors: this.errors, restarts: this.restarts, lastError: this.lastError, since: this.lastReply ? Date.now() - this.lastReply : null,
@@ -193,6 +216,27 @@ class EngineDme {
         Object.keys(got).forEach((id) => { const c = DIDS[id]; if (got[id] !== null) { this.raw[c.key] = got[id]; this.t[c.key] = now; } });
     }
     /** { id: value } for the identifiers it answered, or null (no answer, refused, or the request failed). */
+    /** The fuel quality history (KQE, 22 4035), asked once (Check page > Fuel quality): parseKqe's, or null. */
+    async fuelQuality() {
+        try { const r = await this.link.readMany(DME, [0x4035]); return r ? parseKqe(r) : null; } catch (e) { return null; }
+    }
+    /**
+     * Ethanol from OBD-II (service 01 PID 52: A x 100 / 255 %) where the engine unit doesn't have 550D. Asked with the
+     * slow values; once refused (or unanswered 3 times) not again until reprobe(). ethanolFrom: '550D' | 'OBD' | null.
+     */
+    async _ethanolObd() {
+        if (this.have && this.have.indexOf('550D') >= 0) { this.ethanolFrom = '550D'; return; }
+        if (this.obdEthanol === false || !this.link.physical) return;
+        let u = null;
+        try {
+            u = await this.link.physical(DME, 0x01, [0x52], 1500, (r) => (r[0] === 0x41 && r[1] === 0x52) || (r[0] === 0x7F && r[1] === 0x01));
+        } catch (e) { this.errors++; this.lastError = String(e && e.message || e); return; }
+        if (u && u[0] === 0x41 && u.length >= 3) {
+            this.raw.ethanolPct = u[2] * 100 / 255; this.t.ethanolPct = Date.now(); this.ethanolFrom = 'OBD'; this.obdMiss = 0;
+            if (this.obdEthanol !== true) { this.obdEthanol = true; this.log.info('engine unit: ethanol from OBD PID 52'); }
+        } else if (u && u[0] === 0x7F) { this.obdEthanol = false; this.log.info('engine unit: no ethanol value (550D refused, OBD PID 52 refused)'); }
+        else if (++this.obdMiss >= 3 && this.obdEthanol !== true) this.obdEthanol = false;
+    }
     _fastNow() { try { return !!(this.fastMode && this.fastMode()); } catch (e) { return false; } }
     async _ask(ids) {
         let uds;
@@ -282,6 +326,8 @@ class EngineDme {
                 const got = await this._ask(g.ids);
                 if (got) this._put(got, Date.now());
             }
+            // ethanol from OBD where the engine unit has no 550D: as often as the slow values
+            if (now - (this.lastEth || 0) >= (fm ? FAST_MODE_OTHERS_MS : SLOW_MS)) { this.lastEth = now; await this._ethanolObd(); }
             while (this.reads.length && Date.now() - this.reads[0] > 2000) this.reads.shift();
             this.rate = this.reads.length / 2;
             if (this.lastReply !== before) this._answered();
@@ -334,9 +380,12 @@ function demoRaw(d, t) {
         lambda: th > 0.9 ? 0.82 + Math.sin(t / 900) * 0.01 : 1.0 + Math.sin(t / 1100) * 0.01, lambdaTarget: th > 0.9 ? 0.82 : 1.0,
         knockRetard: th > 0.9 && rpm > 5000 && Math.sin(t / 2300) > 0.8 ? 1.5 : 0, knockFlag: 0,
         mis1: 0, mis2: 0, mis3: 2, mis4: 0, mis5: 0, mis6: 0, intakeC: 31, chargeAirC: 34 + th * 12,
-        timing: th > 0.9 ? 8 + (rpm - 4000) / 1000 : 22, wastegate: th > 0.9 ? 30 : 85, throttlePct: Math.min(100, th * 130),
+        timing: th > 0.9 ? 8 + (rpm - 4000) / 1000 : 22, wastegate: th > 0.9 ? 30 : 85, throttlePct: Math.min(100, th * 130), fuelQualityFactor: 0.12, sinceRefuelMin: 340, ethanolPct: 30,
         tim1: th > 0.9 ? 8 : 22, tim2: th > 0.9 ? 8 : 22, tim3: th > 0.9 ? 8 : 22, tim4: th > 0.9 && Math.sin(t / 2300) > 0.8 ? 5 : th > 0.9 ? 8 : 22, tim5: th > 0.9 ? 8 : 22, tim6: th > 0.9 ? 8 : 22,
     };
 }
 
-module.exports = { EngineDme, DIDS, GROUPS, NAMES, FAST, SLOW, decode, parse, values, demoRaw, DME };
+/** The AFR stoichiometric ratio of a petrol / ethanol blend (by volume, linear: petrol 14.7, ethanol 9.0): E85 9.86. */
+function stoichFor(ethanolPct) { const e = Math.max(0, Math.min(100, ethanolPct)) / 100; return 14.7 - 5.7 * e; }
+
+module.exports = { stoichFor, EngineDme, DIDS, GROUPS, NAMES, FAST, SLOW, decode, parse, parseKqe, values, demoRaw, DME };

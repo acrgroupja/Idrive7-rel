@@ -10,7 +10,8 @@ const { withAlpha } = require('./kit/canvas');
 const LOGO = require('./logo');
 
 const UNITS = { chargeHpa: 'hPa', ambientHpa: 'hPa', boostTargetHpa: 'hPa', railMpa: 'MPa', railTargetMpa: 'MPa', lambda: '', lambdaTarget: '',
-    knockRetard: '°', knockFlag: '', intakeC: '°C', chargeAirC: '°C', timing: '°', wastegate: '%', tim1: '°', tim2: '°', tim3: '°', tim4: '°', tim5: '°', tim6: '°' };
+    knockRetard: '°', knockFlag: '', intakeC: '°C', chargeAirC: '°C', timing: '°', wastegate: '%', tim1: '°', tim2: '°', tim3: '°', tim4: '°', tim5: '°', tim6: '°',
+    throttlePct: '%', boostErrHpa: 'hPa', fuelQualityFactor: '', sinceRefuelMin: 'min', ethanolPct: '%' };
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const ago = (ms) => (!isNum(ms) ? 'never' : ms < 1500 ? 'now' : ms < 60000 ? Math.round(ms / 1000) + ' s ago' : ms < 3600000 ? Math.round(ms / 60000) + ' min ago' : 'over 1 h ago');
 
@@ -56,7 +57,20 @@ function drawCheck(cv, t, G, o) {
     if (X) {
         const f = (v, d) => (isNum(v) ? v.toFixed(d) : '--');
         cv.text('Boost target  4AB0 ' + f(X.boostTarget, 2) + ' bar  ·  controller (actual + 4536) ' + f(X.boostTargetCtl, 2) + ' bar  ·  boost ' + f(X.boost, 2) +
-            ' bar     AFR target ' + f(X.afrTarget, 1) + ' (lambda ' + f(X.lambdaTarget, 2) + ' x ' + f(X.stoich, 1) + ')', 620, 450, 16, t.text);
+            ' bar     AFR target ' + f(X.afrTarget, 1) + ' (lambda ' + f(X.lambdaTarget, 2) + ' x ' + f(X.stoich, 2) + (X.stoichAuto ? ' auto' : '') + ')' +
+            '     ethanol ' + (isNum(X.ethanol) ? Math.round(X.ethanol) + '% (' + (X.ethanolFrom || '550D') + ')' : '--'), 620, 450, 16, t.text);
+    }
+    if (o.gearbox) {
+        const gs = { EGS: 'gearbox unit', signal: "car's signal" }[o.gearbox.source] || 'not found yet';
+        cv.text('Gearbox oil ' + (isNum(o.gearbox.temp) ? Math.round(o.gearbox.temp) + ' °C' : '--') + ' (' + gs + ')', 1556, 474, 16, t.dim, { align: 'right' });
+    }
+    // Fuel quality: a sheet with the engine unit's fuel quality history (also the bar's Fuel quality)
+    if (o.fuel) {
+        const fx = 1100, fy = 54, fw = 200, fh = 38;
+        cv.roundRect(fx, fy, fw, fh, 19, withAlpha('#ffffff', 0.08));
+        cv.strokeRoundRect(fx, fy, fw, fh, 19, 1.5, withAlpha('#ffffff', 0.25));
+        cv.text('Fuel quality', fx + fw / 2, fy + 26, 20, t.text, { align: 'center', font: 'bold' });
+        if (cv.own) cv.target(fx - 4, fy - 4, fw + 8, fh + 8, o.fuel, 'check:fuel');
     }
     const H = o.health;
     if (H) cv.text((isNum(H.latency) ? Math.round(H.latency) + ' ms a request' + (H.fast ? ' · fast mode' : '') + '  ·  ' : '') + 'Dropouts ' + H.gaps + '  ·  request errors ' + H.errors + '  ·  restarts ' + H.restarts + (H.lastError ? '  ·  last: ' + String(H.lastError).slice(0, 40) : ''),

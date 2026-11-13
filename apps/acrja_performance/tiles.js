@@ -60,6 +60,9 @@ const VALUES = [
         unit: (u) => (u.temp === 'f' ? '°F' : '°C'), dec: 0, range: (u) => temps(u, 40, 130), zones: (u) => tempZones(u, 60, 112) },
     { id: 'oil', name: 'Oil', group: 'Engine', metric: (d) => d.oil, show: (v, u) => (u.temp === 'f' ? cToF(v) : v),
         unit: (u) => (u.temp === 'f' ? '°F' : '°C'), dec: 0, range: (u) => temps(u, 40, 150), zones: (u) => tempZones(u, 70, 135) },
+    // the gearbox oil: the gearbox unit's (EGS) or the car's signal (gearbox.js); in the demo the oil's, a little behind
+    { id: 'gearboxOil', name: 'Gearbox oil', group: 'Engine', metric: (d) => d.gearboxOil, show: (v, u) => (u.temp === 'f' ? cToF(v) : v),
+        unit: (u) => (u.temp === 'f' ? '°F' : '°C'), dec: 0, range: (u) => temps(u, 20, 140), zones: (u) => tempZones(u, 60, 125) },
     { id: 'torque', name: 'Torque', group: 'Engine', metric: (d) => d.torque, show: (v, u) => CONV.torque.f(v, u), unit: (u) => CONV.torque.unit(u), dec: 0,
         range: (u) => [0, u.torque === 'lbft' ? 500 : 700] },
     { id: 'power', name: 'Power', group: 'Engine', metric: (d) => powerKw(d.torque, d.rpm), show: (v, u) => (u.power === 'hp' ? v * HP_PER_KW : v),
@@ -95,6 +98,10 @@ const VALUES = [
     { id: 'chargeAir', name: 'Charge air (before throttle)', group: 'Engine unit', metric: (d) => dme(d, 'chargeAir'), show: (v, u) => (u.temp === 'f' ? cToF(v) : v),
         unit: (u) => (u.temp === 'f' ? '°F' : '°C'), dec: 0, range: (u) => temps(u, 0, 100), zones: (u) => tempZones(u, -99, 65).slice(1) },
     // ACR Automobile's logo, as a tile of its own (any slot, any page)
+    { id: 'ethanol', name: 'Ethanol', group: 'Engine unit', metric: (d) => dme(d, 'ethanol'), unit: () => '%', dec: 0, range: () => [0, 100] },
+    { id: 'octane', name: 'Adapted octane', group: 'Engine unit', metric: (d) => dme(d, 'octane'), unit: () => 'RON', dec: 1, range: () => [91, 98] },
+    { id: 'sinceRefuel', name: 'Since refuelling', group: 'Engine unit', metric: (d) => { const m = dme(d, 'sinceRefuel'); return isNum(m) ? m / 60 : null; },
+        unit: () => 'h', dec: 1, range: () => [0, 48] },
     { id: 'throttle', name: 'Throttle plate', group: 'Engine unit', metric: (d) => dme(d, 'throttle'), unit: () => '%', dec: 0, range: () => [0, 100] },
     { id: 'acrLogo', name: 'ACR logo', group: 'ACR Automobile', metric: () => null, logo: true },
     // actual against target: drawn as one graph (gauges_ui), with limits and a tolerance (PAIRS)
@@ -313,14 +320,29 @@ function clean(p) {
 class Pages {
     constructor(file, log) {
         this.file = file; this.log = log || { info() {}, warn() {} };
+        this.ver = 0;
+        this.load();
+    }
+    /** (Re)read the file: at start, and after a set-up came from a USB stick. */
+    load() {
         let saved = null;
-        try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* first start */ }
+        try { saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch (e) { /* first start */ }
         const list = saved && Array.isArray(saved.pages) ? saved.pages.map(clean).filter(Boolean).slice(0, MAX_PAGES) : [];
         this.list = list.length ? list : DEFAULTS.map(clean);
         // the Drag page's live mini tiles: a page of its own (6 slots; the 4-tile setting shows the first 4), p = 'drag'
         this.drag = clean(saved && saved.drag) || clean(DRAG_DEFAULT);
         if (this.drag.layout !== 'nums6') this.drag.layout = 'nums6';
-        this.ver = 0;
+        this.ver++;
+    }
+    /** What a set-up export carries (and import() takes back): the pages and the Drag page's tiles. */
+    data() { return { pages: this.list, drag: this.drag }; }
+    import(d) {
+        const list = d && Array.isArray(d.pages) ? d.pages.map(clean).filter(Boolean).slice(0, MAX_PAGES) : [];
+        if (!list.length) return false;
+        this.list = list;
+        const dr = clean(d.drag);
+        if (dr) { dr.layout = 'nums6'; this.drag = dr; }
+        this.save(); return true;
     }
     save() {
         this.ver++;

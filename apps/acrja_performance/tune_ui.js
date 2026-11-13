@@ -46,6 +46,7 @@ function note(cv, t, m, x, y) {
 /** m = TuneControl.view() + names (n -> the owner's name or ''); act = { map(n), rename(), cooling(on), aggDown, aggUp, burblesApply, burblesOff, asd(on) }. */
 function drawTune(cv, t, G, m, act) {
     if (!m.armed) return drawPick(cv, t, G, act);
+    if (m.pin) return drawPin(cv, t, G, m.pin, act);
     const f = m.features || {};
     // ---- engine map
     G.panel(cv, t, 24, 44, 900, 468, 'Engine map · ' + (NAMES[m.tuner] || ''));
@@ -111,6 +112,27 @@ function drawPick(cv, t, G, act) {
         cv.text(o[2], x + w / 2, y + 150, 20, t.text, { align: 'center', font: 'label' });
         if (cv.own && act.pick) cv.target(x, y, w, h, () => act.pick(o[3]), 'tune:pick:' + o[3]);
     });
+    return cv;
+}
+
+/**
+ * The Tune page behind its PIN (pin.js, Settings > PIN for the Tune page): what to do, a dot a digit, the message,
+ * a keypad (1-5 over 6-0 and Delete). Nothing is sent to the car from here.
+ */
+function drawPin(cv, t, G, p, act) {
+    G.panel(cv, t, 24, 44, 1552, 468, 'Tune');
+    LOGO.draw(cv, 'mark', 1576 - 20 - LOGO.size('mark').w, 62);
+    cv.text(p.title, 800, 150, 34, t.text, { align: 'center', font: 'bold' });
+    const r = 12, gap = 44, x0 = 800 - ((p.len - 1) * gap) / 2;
+    for (let i = 0; i < p.len; i++) {
+        if (i < p.digits) cv.circle(x0 + i * gap, 196, r, t.text);
+        else cv.strokeRoundRect(x0 + i * gap - r, 196 - r, 2 * r, 2 * r, r, 2, withAlpha('#ffffff', 0.4));
+    }
+    if (p.msg) cv.text(p.msg, 800, 250, 20, p.warn ? t.warn : t.dim, { align: 'center', font: 'label' });
+    if (!cv.own) { cv.text('Enter the PIN on the touchscreen', 800, 290, 18, t.dim, { align: 'center', font: 'label' }); return cv; }
+    const busy = p.wait > 0;
+    buttons(cv, t, 240, 290, 1120, 76, 16, [1, 2, 3, 4, 5].map((k) => [String(k), act.pinDigit && act.pinDigit(k)]), busy, 'tune:pin1');
+    buttons(cv, t, 240, 382, 1120, 76, 16, [6, 7, 8, 9, 0].map((k) => [String(k), act.pinDigit && act.pinDigit(k)]).concat([['Delete', act.pinBack]]), false, 'tune:pin2');
     return cv;
 }
 

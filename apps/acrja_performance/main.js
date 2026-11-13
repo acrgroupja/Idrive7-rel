@@ -40,6 +40,12 @@ const { TuneControl } = require('./tune');          // BM3 / MHD map switching (
 const { DiagLink } = require('./diaglink');
 const TUI = require('./tune_ui');
 const { MapNames, renameSheet } = require('./map_names');
+const { PinLock } = require('./pin');                // the Tune page's PIN (from the kit's Live Adjustments)
+const { Gearbox } = require('./gearbox');            // gearbox oil temperature (from the kit's Warm-Up)
+const FUEL = require('./fuel_ui');
+const USB = require('./usb');                     // the car's USB stick: logs, set-up export / import
+const USB_UI = require('./usb_ui');
+const APP_VERSION = (() => { for (const f of ['../package.json', './app.json']) { try { return require(f).version; } catch (e) { /* next */ } } return '?'; })();
 
 const W = 1600, H = 520;
 
@@ -75,15 +81,22 @@ mgu.run({
                 .then(() => { tuneLink.onAvailable(() => tune.refresh().then(() => refresh())); return tune.start(tuneLink); })
                 .then(() => refresh()).catch((e) => log.warn('tune link: ' + (e && e.message || e)));
         }
+        // the PIN in front of the Tune page (Settings > PIN for the Tune page): locked again when the app leaves the screen
+        const pin = new PinLock({ get: (k) => settings.get(k), set: (k, v) => settings.set(k, v) });
+        const tuneOpen = () => tune.armed && !pin.locked();
+        if (ui.onVisible) ui.onVisible((name, on) => { if (name === 'MAIN' && !on) pin.lock(); });
+        settings.onChange((key, value) => { pin.settingChanged(key, value); });
         const tuneAct = (fn) => () => { const p = fn(); refresh(); return Promise.resolve(p).then(() => refresh()).catch((e) => log.warn('tune: ' + e)); };
         const mapNames = new MapNames(path.join(ctx.dataDir, 'map_names.json'), log);
         function openRename() {
+            if (!tuneOpen()) return null;
             const sh = renameSheet({ names: mapNames, start: tune.map || 1, locked: moving, onDone: () => refresh() });
             if (!(ctx.sheet && ctx.sheet(sh))) log.info('rename maps: needs the full-screen renderer (touch)');
             return null;
         }
         const tuneActs = {
             rename: () => openRename(),
+            pinDigit: (n) => () => { pin.digit(n); refresh(); }, pinBack: () => { pin.back(); refresh(); },
             pick: (k) => { log.info('tune picked on the Tune page: ' + k); settings.set('tuner', k); return null; },
             map: (k) => tuneAct(() => tune.setMap(k)), cooling: (on) => tuneAct(() => tune.setCooling(on)), asd: (on) => tuneAct(() => tune.setAsd(on)),
             aggDown: () => { tune.stepAggression(-0.5); refresh(); }, aggUp: () => { tune.stepAggression(0.5); refresh(); },
@@ -113,12 +126,24 @@ mgu.run({
             });
         }, 250);
         /** Everything at this moment: car.data() plus pedal, outside, the engine unit's values (.dme), misfires this session. */
+        // gearbox oil: the gearbox unit (EGS) or the car's signal, asked while the screen shows or a log runs
+        const gearbox = new Gearbox(ctx, log, () => ui.isVisible('MAIN') || (logger && logger.status().on)).start();
+        /** The AFR stoich: Settings > Fuel (for AFR), or Auto: from the engine unit's ethanol reading (petrol while it has none). */
+        function stoichNow(raw) {
+            const s = settings.get('stoich');
+            if (s !== 'auto') return T.isNum(s) ? s : 14.7;
+            const r = raw || (car.data().demo ? null : dme.fresh()), e = r && r.ethanolPct;
+            return T.isNum(e) ? EDME.stoichFor(e) : 14.7;
+        }
         function data() {
             const d = car.data(), now = Date.now();
             d.pedal = d.demo ? (typeof d.throttle === 'number' ? d.throttle * 100 : null) : ext.pedal;
             d.outside = d.demo ? 24 : ext.outside;
-            d.dme = settings.get('engineData') === 'off' ? {} : EDME.values(d.demo ? EDME.demoRaw(d, now) : dme.fresh(), settings.get('stoich'));
+            const raw = settings.get('engineData') === 'off' ? null : d.demo ? EDME.demoRaw(d, now) : dme.fresh();
+            d.stoich = stoichNow(raw);
+            d.dme = raw ? EDME.values(raw, d.stoich) : {};
             d.misfires = misCount.feed(d.dme.misfireTotal);
+            d.gearboxOil = d.demo ? (typeof d.oil === 'number' ? d.oil - 12 : null) : gearbox.temp();
             d.tuneMap = tune.armed ? tune.map : null;
             d.tuneMapName = tune.armed && tune.map ? mapNames.get(tune.map) : '';
             return d;
@@ -194,7 +219,7 @@ mgu.run({
         /* ---------- units ---------- */
         // every page's units: Settings > Units (metric, imperial, or custom: the per-quantity settings)
         const unitsNow = () => Object.assign(T.resolveUnits((k) => settings.get(k)),
-            { stoich: settings.get('stoich'), rpmMax: settings.get('rpmMax'), redline: settings.get('redline') });
+            { stoich: stoichNow(), rpmMax: settings.get('rpmMax'), redline: settings.get('redline') });
         const spd = (v) => T.conv('speed', v, unitsNow());
         const mph = () => unitsNow().speed === 'mph';
 
@@ -400,6 +425,7 @@ mgu.run({
             G.panel(cv, t, 24, 44, 1552, 468, 'Log files  (' + files.length + ')');
             LOGO.draw(cv, 'mark', 1576 - 20 - 200 - 24 - LOGO.size('mark').w, 62);
             G.button(cv, t, 1576 - 20 - 200, 56, 200, 40, 'Delete all', deleteAll, { key: 'delete', confirm: true });
+            G.button(cv, t, 1576 - 20 - 200 - 24 - LOGO.size('mark').w - 24 - 200, 56, 200, 40, 'USB stick', openUsb, { key: 'usb' });
             const cur = logger.status().file, p = (n) => String(n).padStart(2, '0');
             const rows = files.slice(0, 9).map((f) => {
                 const d = new Date(f.at);
@@ -409,6 +435,31 @@ mgu.run({
             G.table(cv, t, 48, 116, 1504, [{ label: 'File', w: 760 }, { label: 'Last written', w: 340 }, { label: 'Size', w: 200, align: 'right' }, { label: '', w: 204, align: 'right', color: 'crit' }],
                 rows, { empty: 'No logs yet. Start one on the Logger page.' });
             if (files.length > 9) cv.text('+ ' + (files.length - 9) + ' older', 48, 500, 20, t.dim);
+        }
+
+        /** Files page > USB stick: copy the logs; export / import the set-up (tiles, pages, settings, map names). */
+        function openUsb() {
+            const sh = USB_UI.usbSheet({ usb: USB,
+                logs: () => {
+                    const cur = logger.status().on ? logger.status().file : null;
+                    const all = logger.list().map((f) => f.name);
+                    return { dir: path.join(ctx.dataDir, 'logs'), names: all.filter((x) => x !== cur), recording: !!cur };
+                },
+                exportCfg: () => ({ version: APP_VERSION, exportedAt: new Date().toISOString(), settings: USB.exportSettings(settings),
+                    pages: pages.data(), mapNames: mapNames.all() }),
+                canImport: () => (moving() ? 'Park the car to import a set-up.' : edit ? 'Finish editing tiles first.' : null),
+                importCfg: (cfg) => {
+                    const n = USB.applySettings(settings, cfg.settings);
+                    const p = pages.import(cfg.pages);
+                    if (cfg.mapNames && typeof cfg.mapNames === 'object') mapNames.setAll(cfg.mapNames);
+                    page = pages.list.length + modes().indexOf('files'); lastGauge = 0;   // the page count may have changed: stay on Files
+                    log.info('set-up imported from USB (' + (cfg.version || '?') + '): ' + n + ' settings, pages ' + p);
+                    return 'Imported' + (cfg.version ? ' (from version ' + cfg.version + ')' : '') + ': ' + n + ' setting' + (n === 1 ? '' : 's') + ' changed'
+                        + (p ? ', ' + pages.list.length + ' gauge page' + (pages.list.length === 1 ? '' : 's') + ' with their tiles' : '') + ', map names.';
+                },
+                onDone: () => { files = logger.list(); filesAt = Date.now(); refresh(); } });
+            if (!(ctx.sheet && ctx.sheet(sh))) log.info('usb: needs the full-screen renderer (touch)');
+            return null;
         }
 
         function deleteAll() {
@@ -429,7 +480,7 @@ mgu.run({
         const tabOf = () => (isGauge() ? 0 : page - pages.list.length + 1);
         function drawCheck(cv, t) {
             const now = Date.now();
-            CUI.drawCheck(cv, t, G, { credit: BRAND.CREDIT,
+            CUI.drawCheck(cv, t, G, { credit: BRAND.CREDIT, fuel: openFuel, gearbox: { temp: gearbox.temp(), source: gearbox.source() },
                 signals: SIGNALS.map((s) => {
                     const v = sigPrev[s[1]];
                     const q = s[3].charAt(0) === '@' ? s[3].slice(1) : null, u = unitsNow();
@@ -440,11 +491,18 @@ mgu.run({
                 demo: car.data().demo, setting: settings.get('engineData'),
                 link: Object.assign({ ready: link.ready, available: link.available, error: link.error }, link.stats),
                 status: dme.status, rate: dme.rate, health: dme.health(),
-                cross: (() => { const e = EDME.values(dme.fresh(), settings.get('stoich')); return Object.assign({ stoich: settings.get('stoich') }, e); })(), have: !!(dme.have && dme.have.length), report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
+                cross: (() => { const st = stoichNow(); const e = EDME.values(dme.fresh(), st); return Object.assign({ stoich: st, stoichAuto: settings.get('stoich') === 'auto', ethanolFrom: dme.ethanolFrom }, e); })(), have: !!(dme.have && dme.have.length), report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
             });
         }
         const kindOf = () => (isGauge() ? 'gauges' : modes()[page - pages.list.length]);
-        const drawTunePage = (cv, t) => TUI.drawTune(cv, t, G, Object.assign(tune.view(), { names: (k) => mapNames.get(k) }), tuneActs);
+        const drawTunePage = (cv, t) => TUI.drawTune(cv, t, G, Object.assign(tune.view(), { names: (k) => mapNames.get(k),
+            pin: tune.armed && pin.locked() ? pin.view('The Tune page') : null }), tuneActs);
+        /** Check page > Fuel quality: the engine unit's adapted octane, time since refuelling and refuelling history (asked once). */
+        function openFuel() {
+            const sh = FUEL.fuelSheet({ get: () => (car.data().demo ? Promise.resolve(FUEL.DEMO) : dme.fuelQuality()), now: () => data().dme, units: unitsNow, onDone: () => refresh() });
+            if (!(ctx.sheet && ctx.sheet(sh))) log.info('fuel quality: needs the full-screen renderer (touch)');
+            return null;
+        }
         const drawMode = (cv, t) => {
             const o = { drag, dyno, d: data(), u: unitsNow(), now: Date.now(), history: dragHistory, view: dynoView, limitsFor: dynoLimits };
             if (kindOf() === 'drag') {
@@ -550,12 +608,12 @@ mgu.run({
             } else if (k === 'drag') a = dragHistory ? 'Live run' : 'Runs';
             else if (k === 'dyno') a = 'Older pull';
             else if (k === 'check') a = 'Ask engine again';
-            else if (k === 'tune') a = tune.armed ? 'Next map' : 'Pick in Settings';
+            else if (k === 'tune') a = !tune.armed ? 'Pick in Settings' : pin.locked() ? 'Enter the PIN' : 'Next map';
             else a = k === 'files' ? (armed ? 'Yes, delete' : 'Delete all') : logger.status().on ? 'Stop log' : 'Start log';
             ui.text('BTN_ACTION', a);
             ui.text('BTN_PAGE', edit ? 'Next tile' : 'Next page');
-            ui.text('BTN_EDIT', k === 'drag' ? 'Panel: ' + VIEW_NAMES[dragView] : k === 'tune' ? 'Rename maps' : edit ? 'Done' : 'Edit tiles');
-            if (ui.visible) ui.visible('BTN_EDIT', k === 'gauges' || (k === 'tune' && tune.armed) || (k === 'drag' && !dragHistory));
+            ui.text('BTN_EDIT', k === 'drag' ? 'Panel: ' + VIEW_NAMES[dragView] : k === 'tune' ? 'Rename maps' : k === 'check' ? 'Fuel quality' : k === 'files' ? 'USB stick' : edit ? 'Done' : 'Edit tiles');
+            if (ui.visible) ui.visible('BTN_EDIT', k === 'gauges' || k === 'check' || k === 'files' || (k === 'tune' && tuneOpen()) || (k === 'drag' && !dragHistory));
         }
         function barDelete() {
             if (!armed) { armed = setTimeout(() => { armed = null; actionLabel(); }, 5000); return actionLabel(); }
@@ -568,7 +626,9 @@ mgu.run({
         ui.onClick('BTN_PAGE', () => (edit ? nextTile() : go(page + 1)));
         ui.onClick('BTN_EDIT', () => {
             if (kindOf() === 'drag') return cycleDragView();
-            if (kindOf() === 'tune') return tune.armed ? openRename() : null;
+            if (kindOf() === 'tune') return tuneOpen() ? openRename() : null;
+            if (kindOf() === 'check') return openFuel();
+            if (kindOf() === 'files') return openUsb();
             return edit ? endEdit() : isGauge() && !locked() && startEdit(0);
         });
         ctx.onTab((i) => {
@@ -586,7 +646,7 @@ mgu.run({
             if (k === 'files') return barDelete();
             if (k === 'drag') { dragHistory = !dragHistory; return refresh(); }
             if (k === 'dyno') return olderPull();
-            if (k === 'tune') return tune.armed ? tuneAct(() => tune.setMap(((tune.map || 0) % 4) + 1))() : null;
+            if (k === 'tune') return tuneOpen() ? tuneAct(() => tune.setMap(((tune.map || 0) % 4) + 1))() : null;
             if (k === 'check') { dme.reprobe(); log.info('engine unit: asked again (Check page)'); return refresh(); }
             return toggleLog();
         });

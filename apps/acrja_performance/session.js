@@ -51,6 +51,10 @@ const COLUMNS = [
     { key: 'wastegate', title: 'wastegate_pct', dec: 0 },
     { key: 'outside', title: 'outside_c', dec: 1 },
     { key: 'throttle', title: 'throttle_plate_pct', dec: 1 },
+    { key: 'gearboxOil', title: 'gearbox_oil_c', dec: 0 },
+    { key: 'octane', title: 'octane_ron', dec: 1 },
+    { key: 'ethanol', title: 'ethanol_pct', dec: 0 },
+    { key: 'stoich', title: 'afr_stoich', dec: 2 },      // the stoich AFR and AFR target are worked out with
     { key: 'map', title: 'tune_map', dec: 0 },       // the BM3 / MHD map last confirmed or accepted (Tuning software)
     { key: 'mapName', title: 'tune_map_name' },       // its name on the Tune page (Rename maps), or empty
 ];
@@ -67,7 +71,7 @@ function gearText(g) { return g === -1 ? 'R' : g === 0 ? 'N' : isNum(g) && g > 0
  * The quantity of each column that has a unit (the rest - rpm, g, lambda, AFR, degrees, % - are the
  * same everywhere), its metric title's ending, and its decimals in the other units.
  */
-const QUANT = { speed: 'speed', coolant: 'temp', oil: 'temp', intake: 'temp', chargeAir: 'temp', outside: 'temp', torque: 'torque',
+const QUANT = { speed: 'speed', coolant: 'temp', oil: 'temp', gearboxOil: 'temp', intake: 'temp', chargeAir: 'temp', outside: 'temp', torque: 'torque',
     power: 'power', boost: 'boost', boostTarget: 'boost', rail: 'fuel', railTarget: 'fuel' };
 const SUFFIX = { speed: { kmh: 'kmh', mph: 'mph' }, temp: { c: 'c', f: 'f' }, torque: { nm: 'nm', lbft: 'lbft' }, power: { kw: 'kw', hp: 'hp' },
     boost: { bar: 'bar', psi: 'psi', kpa: 'kpa' }, fuel: { bar: 'bar', psi: 'psi' } };
@@ -104,7 +108,7 @@ function row(d) {
         gear: gearText(d.gear), gLong: d.gLong, gLat: d.gLat, pedal: d.pedal, outside: d.outside, map: d.tuneMap, mapName: d.tuneMapName,
         boost: e.boost, boostTarget: e.boostTarget, rail: e.rail, railTarget: e.railTarget, lambda: e.lambda, lambdaTarget: e.lambdaTarget,
         afr: e.afr, knock: e.knock, knockFlag: e.knockFlag, misfireTotal: e.misfireTotal, intake: e.intake,
-        chargeAir: e.chargeAir, timing: e.timing, wastegate: e.wastegate, throttle: e.throttle,
+        chargeAir: e.chargeAir, timing: e.timing, wastegate: e.wastegate, throttle: e.throttle, gearboxOil: d.gearboxOil, octane: e.octane, ethanol: e.ethanol, stoich: d.stoich,
         tim1: tim[0], tim2: tim[1], tim3: tim[2], tim4: tim[3], tim5: tim[4], tim6: tim[5],
         mis1: mis[0], mis2: mis[1], mis3: mis[2], mis4: mis[3], mis5: mis[4], mis6: mis[5] };
 }

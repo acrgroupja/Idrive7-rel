@@ -2,7 +2,7 @@
   "id": "acrja_performance",
   "title": "ACR Performance",
   "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes",
-  "version": "0.9.9",
+  "version": "0.11.0",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -40,6 +40,10 @@
       "_broadcasts": [
         "sendTasuResponse"
       ]
+    },
+    "de.bmw.infrastructure.analytics.BasicDataSet": {
+      "_optional": "gearbox oil temperature (when the gearbox unit has none)",
+      "basicDataSet": "s"
     }
   },
   "screens": [
@@ -259,6 +263,10 @@
         [
           9.8,
           "E85 (9.8)"
+        ],
+        [
+          "auto",
+          "Auto · from the engine unit's ethanol reading (flex fuel)"
         ]
       ]
     },
@@ -333,6 +341,25 @@
           "MHD · map, Max Cooling"
         ]
       ]
+    },
+    {
+      "key": "mapPin",
+      "label": "PIN for the Tune page",
+      "type": "bool",
+      "default": false,
+      "when": {
+        "tuner": [
+          "bm3",
+          "mhd"
+        ]
+      }
+    },
+    {
+      "key": "mapPinCode",
+      "label": "Tune page PIN",
+      "type": "object",
+      "default": {},
+      "hidden": true
     },
     {
       "key": "rollout",
@@ -493,5 +520,13 @@
   ],
   "config": {
     "bm3MarkerAddress": "807FFE50"
+  },
+  "mguHmi": [
+    "ID7",
+    "ID8"
+  ],
+  "requires": {
+    "idrive7-renderd": "2.1.18",
+    "mgu-inputgate": "1.1.0"
   }
 }

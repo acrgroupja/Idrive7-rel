@@ -21,6 +21,7 @@ class MapNames {
         this.file = file; this.log = log || { warn() {} }; this.names = {};
         try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); [1, 2, 3, 4].forEach((n) => { if (d[n]) this.names[n] = clean(d[n]).trim(); }); } catch (e) { /* none yet */ }
     }
+    all() { return Object.assign({}, this.names); }
     get(n) { return this.names[n] || ''; }
     label(n) { return this.get(n) || 'Map ' + n; }
     setAll(m) {
