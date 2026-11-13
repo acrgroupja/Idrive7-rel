@@ -59,7 +59,7 @@ function drawTile(cv, t, G, b, id, now, u, hist, sel, pair) {
     if (c && !c.pair && pair && pair.alarm) {
         // a single value with flash limits: the tile as usual, then the note of its limits and, flashing, the red
         drawTile(cv, t, G, b, id, now, u, hist, sel, null);
-        drawAlarm(cv, t, b, c, u, pair);
+        drawAlarm(cv, t, b, c, u, pair, G, T.show(id, now[id], u));
         return;
     }
     if (c && c.logo) drawLogoTile(cv, t, G, b);
@@ -91,16 +91,27 @@ function drawTile(cv, t, G, b, id, now, u, hist, sel, pair) {
     }
 }
 /** A single value's flash: "flash > 2.0°" at the tile's top right; flashing, the tile blinks red with a red frame. */
-function drawAlarm(cv, t, b, c, u, st) {
+function drawAlarm(cv, t, b, c, u, st, G, v) {
     const A = st.alarm, unit = c.unit ? c.unit(u) : '', dec = T.decOf(c.id, u);
     const parts = [];
     if (G_isNum(A.ahi)) parts.push('> ' + T.show(c.id, A.ahi, u).toFixed(dec) + (unit ? ' ' + unit : ''));
     if (G_isNum(A.alo)) parts.push('< ' + T.show(c.id, A.alo, u).toFixed(dec) + (unit ? ' ' + unit : ''));
     if (parts.length) {
-        // beside the name when there is room, else in the bottom corner
-        const note = 'flash ' + parts.join('  '), room = b.w - 36 - cv.textWidth(c.name, 26, { font: 'bold' });
-        const y = cv.textWidth(note, 15) <= room ? b.y + 30 : b.y + b.h - 12;
-        cv.text(note, b.x + b.w - 14, y, 15, st.flash ? t.crit : t.dim, { align: 'right' });
+        const note = 'flash ' + parts.join('  '), nw = cv.textWidth(note, 15), col = st.flash ? t.crit : t.dim;
+        if (b.kind === 'bar') {
+            // a bar has its name at the left and its value at the right of the top row: the note goes between
+            // them when it fits, else in the bottom left corner, under the scale
+            const x0 = b.x + 24, lw = cv.textWidth(String(c.name).toUpperCase(), 22, { font: 'bold', spacing: 2 });
+            const vs = G && G.fmt ? G.fmt(v, T.decOf(c.id, u)) : '----';
+            const vx = b.x + b.w - 24 - (unit ? cv.textWidth(' ' + unit, 26) : 0) - cv.textWidth(vs, 44, { font: 'num' }) - 20;
+            if (x0 + lw + 20 + nw <= vx) cv.text(note, x0 + lw + 20, b.y + 39, 15, col);
+            else cv.text(note, x0, b.y + b.h - 10, 15, col);
+        } else {
+            // beside the name when there is room, else in the bottom corner
+            const room = b.w - 36 - cv.textWidth(c.name, 26, { font: 'bold' });
+            const y = nw <= room ? b.y + 30 : b.y + b.h - 12;
+            cv.text(note, b.x + b.w - 14, y, 15, col, { align: 'right' });
+        }
     }
     if (st.flash) {
         if (Math.floor((st.ms || Date.now()) / 250) % 2 === 0) cv.roundRect(b.x, b.y, b.w, b.h, 6, withAlpha(t.crit, 0.35));
