@@ -2,7 +2,7 @@
   "id": "acrja_performance",
   "title": "ACR Performance",
   "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -259,6 +259,22 @@
         [
           9.8,
           "E85 (9.8)"
+        ]
+      ]
+    },
+    {
+      "key": "watchBy",
+      "label": "Actual-vs-target tiles: \"Watch from\" uses",
+      "type": "choice",
+      "default": "pedal",
+      "options": [
+        [
+          "pedal",
+          "Accelerator pedal (the car)"
+        ],
+        [
+          "throttle",
+          "Throttle plate (engine unit)"
         ]
       ]
     },

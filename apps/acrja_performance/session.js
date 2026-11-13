@@ -50,6 +50,7 @@ const COLUMNS = [
     { key: 'tim6', title: 'timing_cyl6_deg', dec: 1 },
     { key: 'wastegate', title: 'wastegate_pct', dec: 0 },
     { key: 'outside', title: 'outside_c', dec: 1 },
+    { key: 'throttle', title: 'throttle_plate_pct', dec: 1 },
     { key: 'map', title: 'tune_map', dec: 0 },       // the BM3 / MHD map last confirmed or accepted (Tuning software)
     { key: 'mapName', title: 'tune_map_name' },       // its name on the Tune page (Rename maps), or empty
 ];
@@ -103,7 +104,7 @@ function row(d) {
         gear: gearText(d.gear), gLong: d.gLong, gLat: d.gLat, pedal: d.pedal, outside: d.outside, map: d.tuneMap, mapName: d.tuneMapName,
         boost: e.boost, boostTarget: e.boostTarget, rail: e.rail, railTarget: e.railTarget, lambda: e.lambda, lambdaTarget: e.lambdaTarget,
         afr: e.afr, knock: e.knock, knockFlag: e.knockFlag, misfireTotal: e.misfireTotal, intake: e.intake,
-        chargeAir: e.chargeAir, timing: e.timing, wastegate: e.wastegate,
+        chargeAir: e.chargeAir, timing: e.timing, wastegate: e.wastegate, throttle: e.throttle,
         tim1: tim[0], tim2: tim[1], tim3: tim[2], tim4: tim[3], tim5: tim[4], tim6: tim[5],
         mis1: mis[0], mis2: mis[1], mis3: mis[2], mis4: mis[3], mis5: mis[4], mis6: mis[5] };
 }

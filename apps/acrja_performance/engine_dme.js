@@ -14,6 +14,7 @@
  *     5889 lambda (5640), 5816 lambda target, 554C knock retard (mean of the cylinders)
  *   fast 2 (in turn with the first): 59FA ignition angle, 5927 wastegate position,
  *     4A49-4A4F ignition angle of cylinders 1-6 (one cylinder later than the others: knock control on it)
+ *   fast 3: 4600 throttle plate angle (5858)
  *   slow (once a second): 4A36 knock detected, 4B23-4B32 misfire counters cylinders 1-6, 580F intake air;
  *     59D4 charge air temperature before the throttle
  *
@@ -56,11 +57,15 @@ const DIDS = {
     '4A4E': { key: 'tim5', bytes: 2, signed: true, k: 0.1 },
     '4A4F': { key: 'tim6', bytes: 2, signed: true, k: 0.1 },
     '59D4': { key: 'chargeAirC', bytes: 2, k: 0.0234375, o: -273.15 },
+    // the throttle plate (DK) angle from its lower stop, % (not the accelerator pedal: that comes from the car's own signal)
+    '4600': { key: 'throttlePct', bytes: 2, signed: true, k: 0.0078125, alt: '5858' },
+    '5858': { key: 'throttlePct', bytes: 2, signed: true, k: 0.0078125 },
 };
 /** The request groups (8 identifiers at most each): fast ones every round, in turn; slow ones once a second. */
 const GROUPS = [
     { name: 'fast', ids: ['4205', '4201', '4AB0', '58EF', '5837', '5889', '5816', '554C'], fast: true },
     { name: 'fast 2', ids: ['59FA', '5927', '4A49', '4A4A', '4A4C', '4A4D', '4A4E', '4A4F'], fast: true },
+    { name: 'fast 3', ids: ['4600'], fast: true },
     { name: 'slow', ids: ['4A36', '4B23', '4B24', '4B25', '4B30', '4B31', '4B32', '580F'] },
     { name: 'slow 2', ids: ['59D4'] },
 ];
@@ -73,8 +78,12 @@ const NAMES = {
     '4B30': 'Misfires cyl 4', '4B31': 'Misfires cyl 5', '4B32': 'Misfires cyl 6', '580F': 'Intake air', '59FA': 'Ignition angle',
     '5927': 'Wastegate position', '4A49': 'Ignition cyl 1', '4A4A': 'Ignition cyl 2', '4A4C': 'Ignition cyl 3', '4A4D': 'Ignition cyl 4',
     '4A4E': 'Ignition cyl 5', '4A4F': 'Ignition cyl 6', '59D4': 'Charge air before throttle',
+    '4600': 'Throttle plate', '5858': 'Throttle plate (alt.)',
 };
-const SLOW_MS = 1000, RETRY_MS = 30000, STALE_MS = 2000, MIN_ROUND_MS = 50;
+// RETRY_MS: an engine that answered none of its values is asked again after this. STALE_MS: a value older than
+// this counts as none. Gaps (the unit stops answering for a while): asked again after GAP_MIN_MS, doubling to GAP_MAX_MS,
+// keeping what it has; quiet for REPROBE_MS, it is asked which values it has again.
+const SLOW_MS = 1000, RETRY_MS = 10000, STALE_MS = 3000, MIN_ROUND_MS = 50, GAP_MIN_MS = 500, GAP_MAX_MS = 5000, REPROBE_MS = 60000;
 
 /** One identifier's raw bytes -> its value, or null (no data). */
 function decode(id, bytes) {
@@ -125,6 +134,7 @@ function values(raw, stoich) {
         afr: n(raw.lambda) !== null ? raw.lambda * st : null, afrTarget: n(raw.lambdaTarget) !== null ? raw.lambdaTarget * st : null,
         knock: n(raw.knockRetard), knockFlag: n(raw.knockFlag), misfires: mis, misfireTotal: got.length ? got.reduce((a, b) => a + b, 0) : null,
         intake: n(raw.intakeC), chargeAir: n(raw.chargeAirC), wastegate: n(raw.wastegate),
+        throttle: n(raw.throttlePct) !== null ? Math.max(0, Math.min(100, raw.throttlePct)) : null,
         timing: n(raw.timing), timingCyl: tims, timingSpread: timsGot.length >= 2 ? Math.max.apply(null, timsGot) - Math.min.apply(null, timsGot) : null,
     };
 }
@@ -141,15 +151,25 @@ class EngineDme {
         this.wanted = opts.wanted || (() => true);
         this.raw = {}; this.t = {}; this.status = 'off'; this.have = null; this.fast = []; this.slow = [];
         this.running = false; this.lastSlow = 0; this.triedAt = 0; this.reads = []; this.rate = 0;
+        // health, for the Check page: gaps (the unit went quiet and came back), request errors, loop restarts
+        this.lastReply = 0; this.quietSince = null; this.gap = GAP_MIN_MS; this.gaps = 0; this.errors = 0; this.restarts = 0; this.lastError = null;
     }
     start() {
         if (this.running) return;
         this.running = true;
-        this._loop().catch((e) => { this.log.warn('engine unit: ' + (e && e.message || e)); this.running = false; this.status = 'off'; });
+        // the loop never stays down: anything thrown is logged and it starts again a second later
+        const run = () => this._loop().catch((e) => {
+            this.restarts++; this.lastError = String(e && e.message || e);
+            this.log.warn('engine unit: reader stopped (' + this.lastError + '), starting again');
+            if (this.running) setTimeout(() => { if (this.running) run(); }, 1000); else this.status = 'off';
+        });
+        run();
     }
     stop() { this.running = false; }
     /** Ask which values the engine has again, now (the Check page's button). */
-    reprobe() { this.have = null; this.triedAt = 0; this.status = 'off'; if (this.link.wake) this.link.wake(DME); }
+    reprobe() { this.have = null; this.triedAt = 0; this.status = 'off'; this.quietSince = null; this.gap = GAP_MIN_MS; if (this.link.wake) this.link.wake(DME); }
+    /** For the Check page: gaps, request errors, restarts, the last error, ms since the last answer. */
+    health() { return { gaps: this.gaps, errors: this.errors, restarts: this.restarts, lastError: this.lastError, since: this.lastReply ? Date.now() - this.lastReply : null }; }
     /** The latest catalog values (older than 2 s count as none). */
     fresh() {
         const out = {}, now = Date.now();
@@ -159,10 +179,35 @@ class EngineDme {
     _put(got, now) {
         Object.keys(got).forEach((id) => { const c = DIDS[id]; if (got[id] !== null) { this.raw[c.key] = got[id]; this.t[c.key] = now; } });
     }
+    /** { id: value } for the identifiers it answered, or null (no answer, refused, or the request failed). */
     async _ask(ids) {
-        const uds = await this.link.readMany(DME, ids.map((x) => parseInt(x, 16)));
+        let uds;
+        try { uds = await this.link.readMany(DME, ids.map((x) => parseInt(x, 16))); } catch (e) {
+            // the transport refused the request (busy, restarting): count it, try again next round
+            this.errors++; this.lastError = String(e && e.message || e);
+            if (this.errors % 20 === 1) this.log.warn('engine unit: request failed (' + this.lastError + ')');
+            await sleep(200);
+            return null;
+        }
         if (uds === undefined) return null;                 // cancelled before it went
-        return uds ? parse(uds, ids) : null;
+        const got = uds ? parse(uds, ids) : null;
+        if (got && Object.keys(got).length) this.lastReply = Date.now();
+        return got;
+    }
+    /** The unit went quiet (no answer several times in a row): keep what it has, ask again soon, then less often. */
+    async _gap() {
+        const now = Date.now();
+        if (this.quietSince === null) { this.quietSince = now; this.gaps++; this.log.info('engine unit: no answer - asking again in ' + this.gap + ' ms'); }
+        this.status = 'no answer';
+        await sleep(this.gap);
+        this.gap = Math.min(GAP_MAX_MS, this.gap * 2);
+        if (this.link.wake) this.link.wake(DME);
+        // quiet a long time (ignition off and on, the unit restarted): find out again which values it has
+        if (now - this.quietSince > REPROBE_MS) { this.have = null; this.triedAt = 0; this.quietSince = null; this.gap = GAP_MIN_MS; }
+    }
+    _answered() {
+        if (this.quietSince !== null) this.log.info('engine unit: answering again after ' + Math.round((Date.now() - this.quietSince) / 1000) + ' s');
+        this.quietSince = null; this.gap = GAP_MIN_MS; this.status = 'reading';
     }
     /** Each identifier alone (its alternative when refused): what this engine has. Answers noted per identifier. */
     async _probe() {
@@ -194,6 +239,7 @@ class EngineDme {
                 const have = await this._probe();
                 this.have = have;
                 if (!have.length) { this.status = 'no answer'; this.log.info('engine unit: no answer to its values (another engine, or the ignition off?)'); continue; }
+                this.quietSince = null; this.gap = GAP_MIN_MS; this.lastReply = Date.now();
                 // each group: the identifiers it has (an alternative in its original's group)
                 this.groups = GROUPS.map((g) => ({ name: g.name, fast: !!g.fast, last: 0,
                     ids: have.filter((id) => g.ids.indexOf(id) >= 0 || g.ids.indexOf(alternativeOf(id)) >= 0) })).filter((g) => g.ids.length);
@@ -203,6 +249,7 @@ class EngineDme {
                 this.log.info('engine unit: reading ' + have.join(' '));
             }
             const now = Date.now(), fast = this.groups.filter((g) => g.fast);
+            const before = this.lastReply;
             if (fast.length) {
                 const g = fast[turn++ % fast.length];                     // the fast groups in turn
                 const got = await this._ask(g.ids);
@@ -216,8 +263,9 @@ class EngineDme {
             }
             while (this.reads.length && Date.now() - this.reads[0] > 2000) this.reads.shift();
             this.rate = this.reads.length / 2;
-            // several misses in a row: the link skips the unit; start over (probe again in 30 s)
-            if (this.link.silent && this.link.silent(DME)) { this.have = []; this.triedAt = Date.now(); this.status = 'no answer'; }
+            if (this.lastReply !== before) this._answered();
+            // several misses in a row: the link skips the unit. Keep its values list and ask again soon (was: 30 s and a full probe)
+            if (this.link.silent && this.link.silent(DME)) { await this._gap(); continue; }
             // at most 20 rounds a second (the link paces too); and a round always lets timers run
             await sleep(fast.length ? Math.max(1, MIN_ROUND_MS - (Date.now() - now)) : 200);
         }
@@ -253,7 +301,7 @@ function demoRaw(d, t) {
         lambda: th > 0.9 ? 0.82 + Math.sin(t / 900) * 0.01 : 1.0 + Math.sin(t / 1100) * 0.01, lambdaTarget: th > 0.9 ? 0.82 : 1.0,
         knockRetard: th > 0.9 && rpm > 5000 && Math.sin(t / 2300) > 0.8 ? 1.5 : 0, knockFlag: 0,
         mis1: 0, mis2: 0, mis3: 2, mis4: 0, mis5: 0, mis6: 0, intakeC: 31, chargeAirC: 34 + th * 12,
-        timing: th > 0.9 ? 8 + (rpm - 4000) / 1000 : 22, wastegate: th > 0.9 ? 30 : 85,
+        timing: th > 0.9 ? 8 + (rpm - 4000) / 1000 : 22, wastegate: th > 0.9 ? 30 : 85, throttlePct: Math.min(100, th * 130),
         tim1: th > 0.9 ? 8 : 22, tim2: th > 0.9 ? 8 : 22, tim3: th > 0.9 ? 8 : 22, tim4: th > 0.9 && Math.sin(t / 2300) > 0.8 ? 5 : th > 0.9 ? 8 : 22, tim5: th > 0.9 ? 8 : 22, tim6: th > 0.9 ? 8 : 22,
     };
 }

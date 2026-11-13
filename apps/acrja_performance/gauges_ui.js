@@ -130,7 +130,7 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
     const nw = cv.text(c.name, b.x + 18, b.y + (small ? 30 : 36), small ? 18 : 24, t.text, { font: 'bold' });
     // what changes the flashing, top right when it fits: below the pedal % (not watched), a custom target, one side only
     const room = b.w - 14 - 18 - nw - 16;
-    let tags = [lim.thr > 0 && !watch ? 'pedal < ' + lim.thr + '%' : '', pair.custom ? 'custom target' : '', dir < 0 ? 'under only' : dir > 0 ? 'over only' : ''].filter(Boolean).join(' · ');
+    let tags = [lim.thr > 0 && !watch ? (pair.gateName || 'pedal') + ' < ' + lim.thr + '%' : '', pair.custom ? 'custom target' : '', dir < 0 ? 'under only' : dir > 0 ? 'over only' : ''].filter(Boolean).join(' · ');
     if (tags && cv.textWidth(tags, 15, { font: 'label' }) > room) {      // a narrow tile: the short words
         tags = [lim.thr > 0 && !watch ? '<' + lim.thr + '%' : '', pair.custom ? 'custom' : '', dir < 0 ? 'under' : dir > 0 ? 'over' : ''].filter(Boolean).join(' · ');
     }

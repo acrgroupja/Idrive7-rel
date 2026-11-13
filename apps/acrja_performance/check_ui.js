@@ -37,10 +37,10 @@ function drawCheck(cv, t, G, o) {
     G.panel(cv, t, 600, 44, 976, 468, 'Engine unit (DME)');
     LOGO.draw(cv, 'mark', 1576 - 20 - LOGO.size('mark').w, 62);
     let head, col = t.text;
-    if (o.setting === 'off') { head = 'Off in Settings (Engine unit values)'; col = t.dim; } else if (o.demo) { head = 'Demo data: the engine unit is not asked'; col = t.warn; } else if (!L.ready) { head = 'Diagnostic link starting' + (L.error ? ': ' + L.error : ''); col = t.warn; } else if (o.status === 'reading') head = 'Reading ' + (isNum(o.rate) ? o.rate.toFixed(1) : '--') + ' times a second'; else if (o.status === 'no answer') { head = 'No answer: another engine, or the ignition off? Asked again every 30 s'; col = t.crit; } else head = o.status === 'probing' ? 'Asking which values this engine has ...' : 'Waiting (asked while the app is shown)';
+    if (o.setting === 'off') { head = 'Off in Settings (Engine unit values)'; col = t.dim; } else if (o.demo) { head = 'Demo data: the engine unit is not asked'; col = t.warn; } else if (!L.ready) { head = 'Diagnostic link starting' + (L.error ? ': ' + L.error : ''); col = t.warn; } else if (o.status === 'reading') head = 'Reading ' + (isNum(o.rate) ? o.rate.toFixed(1) : '--') + ' times a second'; else if (o.status === 'no answer') { head = o.have ? 'No answer for ' + Math.round((o.health && o.health.since || 0) / 1000) + ' s: asking again' : 'No answer: another engine, or the ignition off? Asked again every 10 s'; col = t.crit; } else head = o.status === 'probing' ? 'Asking which values this engine has ...' : 'Waiting (asked while the app is shown)';
     cv.text(head, 620, 108, 21, col);
     cv.text('requests ' + (L.sent || 0) + '  ·  replies ' + (L.replies || 0) + '  ·  none ' + (L.missed || 0), 1556, 108, 17, t.dim, { align: 'right' });
-    const rows = o.report || [], half = Math.ceil(rows.length / 2), rh = Math.min(26, Math.floor(370 / Math.max(1, half)));
+    const rows = o.report || [], half = Math.ceil(rows.length / 2), rh = Math.min(26, Math.floor(316 / Math.max(1, half)));
     rows.forEach((r, i) => {
         const x = i < half ? 620 : 1100, y = 144 + (i % half) * rh;
         const c = r.answer === 'yes' ? '#2fd27a' : r.answer === 'refused' ? t.warn : r.answer === 'no reply' ? t.crit : withAlpha(t.dim, 0.6);
@@ -51,6 +51,9 @@ function drawCheck(cv, t, G, o) {
         const v = r.answer === 'yes' ? (isNum(r.value) ? (Math.abs(r.value) >= 100 ? r.value.toFixed(0) : r.value.toFixed(2)) + (unit ? ' ' + unit : '') : '--') : r.answer;
         cv.text(v, x + 456, y, 17, r.answer === 'yes' ? t.text : c, { align: 'right' });
     });
+    const H = o.health;
+    if (H) cv.text('Dropouts ' + H.gaps + '  ·  request errors ' + H.errors + '  ·  restarts ' + H.restarts + (H.lastError ? '  ·  last: ' + String(H.lastError).slice(0, 40) : ''),
+        620, 474, 16, H.gaps || H.errors || H.restarts ? t.warn : t.dim);
     cv.text('Green: answered  ·  amber: refused (this engine lacks it)  ·  red: no reply  ·  grey: not asked yet', 620, 500, 16, t.dim);
 }
 

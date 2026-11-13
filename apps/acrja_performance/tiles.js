@@ -95,6 +95,7 @@ const VALUES = [
     { id: 'chargeAir', name: 'Charge air (before throttle)', group: 'Engine unit', metric: (d) => dme(d, 'chargeAir'), show: (v, u) => (u.temp === 'f' ? cToF(v) : v),
         unit: (u) => (u.temp === 'f' ? '°F' : '°C'), dec: 0, range: (u) => temps(u, 0, 100), zones: (u) => tempZones(u, -99, 65).slice(1) },
     // ACR Automobile's logo, as a tile of its own (any slot, any page)
+    { id: 'throttle', name: 'Throttle plate', group: 'Engine unit', metric: (d) => dme(d, 'throttle'), unit: () => '%', dec: 0, range: () => [0, 100] },
     { id: 'acrLogo', name: 'ACR logo', group: 'ACR Automobile', metric: () => null, logo: true },
     // actual against target: drawn as one graph (gauges_ui), with limits and a tolerance (PAIRS)
     { id: 'boostPair', name: 'Boost vs target', group: 'Actual vs target', pair: ['boost', 'boostTarget'], metric: (d) => dme(d, 'boost'), show: pressure, unit: pUnit, dec: 2, decOf: pDec },
@@ -156,11 +157,11 @@ const PAIRS = {
         dir: DIR, thr: THR, ct: [0, 0.75, 0.77, 0.78, 0.8, 0.82, 0.83, 0.85, 0.88, 0.92, 1], tsrc: TSRC } },
 };
 const LIMIT_KEYS = ['lo', 'hi', 'tol', 'dir', 'thr', 'ct', 'tsrc'];
-const LIMIT_NAMES = { lo: 'Graph low', hi: 'Graph high', tol: 'Tolerance', dir: 'Flash when', thr: 'Watch from pedal', ct: 'Custom target', tsrc: 'Use custom target' };
+const LIMIT_NAMES = { lo: 'Graph low', hi: 'Graph high', tol: 'Tolerance', dir: 'Flash when', thr: 'Watch from', ct: 'Custom target', tsrc: 'Use custom target' };
 /** A limit as text where it isn't a number in the value's unit (null: it is one). */
 function limitText(k, v) {
     if (k === 'dir') return v < 0 ? 'Under target only' : v > 0 ? 'Over target only' : 'Under or over';
-    if (k === 'thr') return v > 0 ? v + ' % pedal and up' : 'Always';
+    if (k === 'thr') return v > 0 ? v + ' % and up' : 'Always';
     if (k === 'ct' && !(v > 0)) return 'Off';
     if (k === 'tsrc') return v === 1 ? 'Always (ignore the engine)' : 'When the engine gives none';
     return null;

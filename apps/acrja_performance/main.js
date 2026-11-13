@@ -213,6 +213,7 @@ mgu.run({
         const alarms = {};
         const fmtLimit = (id, k, v) => {
             const u = unitsNow(), c = T.BY_ID[id];
+            if (k === 'thr' && v > 0) return v + ' % ' + (settings.get('watchBy') === 'throttle' ? 'throttle' : 'pedal') + ' and up';
             const txt = T.limitText(k, v);
             if (txt) return txt;
             return (k === 'tol' ? '± ' : '') + G.fmt(T.show(id, v, u), T.decOf(id, u) + (k === 'tol' && T.decOf(id, u) < 2 ? 1 : 0)) + ' ' + c.unit(u);
@@ -225,8 +226,11 @@ mgu.run({
             if (c.pair) {
                 // the target: the engine unit's, or the tile's custom one; watched only from the pedal % set (thr)
                 const lim = T.limitsOf(pg, i), al = alarms[key] || (alarms[key] = new T.Alarm());
-                const tg = T.pairTarget(lim, now[c.pair[1]]), watch = !(lim.thr > 0) || (T.isNum(now.pedal) && now.pedal >= lim.thr);
-                return { lim, ms, target: tg.v, custom: tg.custom, watch, flash: al.feed(now[c.pair[0]], tg.v, lim.tol, ms, lim.dir, watch) };
+                // watched from: the accelerator pedal (the car's signal) or the throttle plate (engine unit), Settings;
+                // the plate when there is no reading of it falls back to the pedal
+                const byThrottle = settings.get('watchBy') === 'throttle' && T.isNum(now.throttle), gv = byThrottle ? now.throttle : now.pedal;
+                const tg = T.pairTarget(lim, now[c.pair[1]]), watch = !(lim.thr > 0) || (T.isNum(gv) && gv >= lim.thr);
+                return { lim, ms, target: tg.v, custom: tg.custom, watch, gateName: byThrottle ? 'throttle' : 'pedal', flash: al.feed(now[c.pair[0]], tg.v, lim.tol, ms, lim.dir, watch) };
             }
             const A = T.alarmsOf(pg, i);
             if (!A) return null;
@@ -428,7 +432,7 @@ mgu.run({
                 }),
                 demo: car.data().demo, setting: settings.get('engineData'),
                 link: Object.assign({ ready: link.ready, available: link.available, error: link.error }, link.stats),
-                status: dme.status, rate: dme.rate, report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
+                status: dme.status, rate: dme.rate, health: dme.health(), have: !!(dme.have && dme.have.length), report: dme.report(), keyOf: (id) => (EDME.DIDS[id] || {}).key,
             });
         }
         const kindOf = () => (isGauge() ? 'gauges' : modes()[page - pages.list.length]);
