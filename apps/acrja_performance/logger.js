@@ -11,6 +11,7 @@
  *   lg.stop()         -> writes what is left and closes the file
  *   lg.status()       -> { on, file, rows, bytes, startedAt, error }
  *   lg.list()         -> the newest files first: [{ name, bytes, at }]
+ *   lg.deleteOne(name) -> removes that log file (not the one being written)
  *   lg.deleteAll()    -> removes every log file (not the one being written)
  *
  * Files are flushed once a second, so a sudden power cut loses at most a second.
@@ -160,6 +161,12 @@ class Logger {
         });
     }
 
+    /** One log file (not the one being written); true when it went. */
+    deleteOne(name) {
+        const cur = this.status().file;
+        if (!name || name === cur || name.indexOf('/') >= 0 || name.indexOf('..') >= 0) return false;
+        try { fs.unlinkSync(path.join(this.dir, name)); return true; } catch (e) { return false; }
+    }
     deleteAll() {
         const cur = this.file && path.basename(this.file);
         let n = 0;

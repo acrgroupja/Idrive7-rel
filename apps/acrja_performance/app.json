@@ -2,7 +2,7 @@
   "id": "acrja_performance",
   "title": "ACR Performance",
   "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -44,6 +44,10 @@
     "de.bmw.infrastructure.analytics.BasicDataSet": {
       "_optional": "gearbox oil temperature (when the gearbox unit has none)",
       "basicDataSet": "s"
+    },
+    "de.bmw.infotainment.KombiIF": {
+      "_optional": "odometer (Fuel quality: distance since refuelling)",
+      "statusRangeTankStatus": "rs"
     }
   },
   "screens": [
@@ -285,6 +289,33 @@
           "Throttle plate (engine unit)"
         ]
       ]
+    },
+    {
+      "key": "clusterWarn",
+      "label": "Warnings on the cluster (needs Cluster renderer from the MGU Store)",
+      "type": "choice",
+      "default": "always",
+      "options": [
+        [
+          "always",
+          "Always · also with the app in the background (reads the engine unit)"
+        ],
+        [
+          "shown",
+          "Only while the app is on screen"
+        ],
+        [
+          "off",
+          "Off · the banner in the app only"
+        ]
+      ]
+    },
+    {
+      "key": "setupDone",
+      "label": "First-start setup done",
+      "type": "bool",
+      "default": false,
+      "hidden": true
     },
     {
       "key": "engineData",

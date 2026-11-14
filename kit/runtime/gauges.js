@@ -514,12 +514,14 @@ function chart(cv, t, x, y, w, h, g) {
     const px = x + pad.l, pw = w - pad.l - pad.r, py = y + pad.t, ph = h - pad.t - pad.b;
     const X = (v) => px + (v - x0) / (x1 - x0) * pw, Y = (v) => py + ph - (v - y0) / (y1 - y0) * ph;
     const ys = g.yStep || niceStep(y1 - y0, 4), xs = g.xStep || niceStep(x1 - x0, 5);
-    const yf = g.yFmt || ((v) => fmt(v, ys % 1 ? 1 : 0)), xf = g.xFmt || ((v) => fmt(v, xs % 1 ? 1 : 0));
+    // ACR: g.fs, the labels' size (16); a step's own decimals (0.05 -> 2), so labels never repeat
+    const fs = g.fs || 16, sd = (st) => (st % 1 === 0 ? 0 : (st * 10) % 1 === 0 ? 1 : 2);
+    const yf = g.yFmt || ((v) => fmt(v, sd(ys))), xf = g.xFmt || ((v) => fmt(v, sd(xs)));
     for (let v = y0; v <= y1 + 1e-9; v += ys) {
         cv.fillRect(px, Math.round(Y(v)), pw, 1, withAlpha(t.tick, v === y0 ? 0.6 : 0.25));
-        cv.text(yf(v), px - 8, Y(v) + 6, 16, t.dim, { align: 'right' });
+        cv.text(yf(v), px - 8, Y(v) + fs * 0.38, fs, t.dim, { align: 'right' });
     }
-    for (let v = x0; v <= x1 + 1e-9; v += xs) cv.text(xf(v) + (g.xUnit && v + xs > x1 + 1e-9 ? ' ' + g.xUnit : ''), X(v), py + ph + 20, 16, t.dim, { align: 'center' });
+    for (let v = x0; v <= x1 + 1e-9; v += xs) cv.text(xf(v) + (g.xUnit && v + xs > x1 + 1e-9 ? ' ' + g.xUnit : ''), X(v), py + ph + fs + 4, fs, t.dim, { align: 'center' });
     if (g.yUnit) cv.text(g.yUnit, px - 8, py - 2, 14, t.dim, { align: 'right', font: 'bold' });
     for (const m of g.marks || []) {
         cv.fillRect(px, Math.round(Y(m.y)), pw, 1, withAlpha(col(t, m.color, t.warn), 0.6));

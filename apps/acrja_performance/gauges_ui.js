@@ -54,11 +54,11 @@ function ticksFor(min, max, div) {
  * Draw one tile. b = its box; id = its value (null: empty); now = readAll() of the latest data;
  * u = units; hist = History (for a number's trace); sel = marked (editing); G = kit/gauges; t = theme.
  */
-function drawTile(cv, t, G, b, id, now, u, hist, sel, pair) {
+function drawTile(cv, t, G, b, id, now, u, hist, sel, pair, peak) {
     const c = id ? T.BY_ID[id] : null;
     if (c && !c.pair && pair && pair.alarm) {
         // a single value with flash limits: the tile as usual, then the note of its limits and, flashing, the red
-        drawTile(cv, t, G, b, id, now, u, hist, sel, null);
+        drawTile(cv, t, G, b, id, now, u, hist, sel, null, peak);
         drawAlarm(cv, t, b, c, u, pair, G, T.show(id, now[id], u));
         return;
     }
@@ -79,10 +79,18 @@ function drawTile(cv, t, G, b, id, now, u, hist, sel, pair) {
         } else if (b.kind === 'bar') {
             G.panel(cv, t, b.x, b.y, b.w, b.h, null);
             G.bar(cv, t, b.x + 24, b.y + 14, b.w - 48, b.h - 30, { label: c.name, value: v, min: r[0], max: r[1], unit, decimals: T.decOf(c.id, u), zones,
-                origin: r[0] < 0 ? 0 : undefined, ramp: c.id === 'rpm' ? 'hot' : undefined });
+                origin: r[0] < 0 ? 0 : undefined, ramp: c.id === 'rpm' ? 'hot' : undefined, peak: G.isNum(peak) ? T.show(id, peak, u) : undefined });
+            if (G.isNum(peak)) cv.text('max ' + T.show(id, peak, u).toFixed(T.decOf(c.id, u)), b.x + b.w - 24, b.y + b.h - 8, 20, t.hang || t.accent2 || t.dim, { align: 'right' });
         } else {
-            G.stat(cv, t, b.x, b.y, b.w, b.h, { label: c.name, value: v, unit, decimals: T.decOf(c.id, u), zones, size: Math.min(96, Math.round(b.h * 0.42)),
+            const size = Math.min(96, Math.round(b.h * 0.42));
+            G.stat(cv, t, b.x, b.y, b.w, b.h, { label: c.name, value: v, unit, decimals: T.decOf(c.id, u), zones, size,
                 history: hist ? hist.values(id).map((x) => T.show(id, x, u)) : null });
+            // the highest since the last reset, at the right of the value's row (when it fits)
+            if (G.isNum(peak)) {
+                const ps = 'max ' + T.show(id, peak, u).toFixed(T.decOf(c.id, u)), vy = b.y + 52 + size * 0.78;
+                const used = 26 + cv.textWidth(G.fmt(v, T.decOf(c.id, u)), size, { font: 'num' }) + cv.textWidth(unit || '', 28) + 30;
+                if (used + cv.textWidth(ps, 22) < b.w - 18) cv.text(ps, b.x + b.w - 16, vy, 22, t.hang || t.accent2 || t.dim, { align: 'right' });
+            }
         }
     }
     if (sel) {
@@ -97,26 +105,31 @@ function drawAlarm(cv, t, b, c, u, st, G, v) {
     if (G_isNum(A.ahi)) parts.push('> ' + T.show(c.id, A.ahi, u).toFixed(dec) + (unit ? ' ' + unit : ''));
     if (G_isNum(A.alo)) parts.push('< ' + T.show(c.id, A.alo, u).toFixed(dec) + (unit ? ' ' + unit : ''));
     if (parts.length) {
-        const note = 'flash ' + parts.join('  '), nw = cv.textWidth(note, 15), col = st.flash ? t.crit : t.dim;
+        const note = 'flash ' + parts.join('  '), nw = cv.textWidth(note, 20), col = st.flash ? t.crit : t.dim;
         if (b.kind === 'bar') {
             // a bar has its name at the left and its value at the right of the top row: the note goes between
             // them when it fits, else in the bottom left corner, under the scale
             const x0 = b.x + 24, lw = cv.textWidth(String(c.name).toUpperCase(), 22, { font: 'bold', spacing: 2 });
             const vs = G && G.fmt ? G.fmt(v, T.decOf(c.id, u)) : '----';
             const vx = b.x + b.w - 24 - (unit ? cv.textWidth(' ' + unit, 26) : 0) - cv.textWidth(vs, 44, { font: 'num' }) - 20;
-            if (x0 + lw + 20 + nw <= vx) cv.text(note, x0 + lw + 20, b.y + 39, 15, col);
-            else cv.text(note, x0, b.y + b.h - 10, 15, col);
+            if (x0 + lw + 20 + nw <= vx) cv.text(note, x0 + lw + 20, b.y + 40, 20, col);
+            else cv.text(note, x0, b.y + b.h - 8, 20, col);
         } else {
             // beside the name when there is room, else in the bottom corner
             const room = b.w - 36 - cv.textWidth(c.name, 26, { font: 'bold' });
-            const y = nw <= room ? b.y + 30 : b.y + b.h - 12;
-            cv.text(note, b.x + b.w - 14, y, 15, col, { align: 'right' });
+            const y = nw <= room ? b.y + 32 : b.y + b.h - 12;
+            cv.text(note, b.x + b.w - 14, y, 20, col, { align: 'right' });
         }
     }
     if (st.flash) {
         if (Math.floor((st.ms || Date.now()) / 250) % 2 === 0) cv.roundRect(b.x, b.y, b.w, b.h, 6, withAlpha(t.crit, 0.35));
         cv.strokeRoundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 6, 4, t.crit);
     }
+}
+/** "+0.04", "-0.04", "0" (never "-0" or "-0.0"). */
+function diffText(dv, dec) {
+    const r = Number(dv.toFixed(dec));
+    return r === 0 ? (0).toFixed(dec) : (r > 0 ? '+' : '') + r.toFixed(dec);
 }
 const G_isNum = (v) => typeof v === 'number' && isFinite(v);
 
@@ -142,30 +155,31 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
     // what changes the flashing, top right when it fits: below the pedal % (not watched), a custom target, one side only
     const room = b.w - 14 - 18 - nw - 16;
     let tags = [lim.thr > 0 && !watch ? (pair.gateName || 'pedal') + ' < ' + lim.thr + '%' : '', pair.custom ? 'custom target' : '', dir < 0 ? 'under only' : dir > 0 ? 'over only' : ''].filter(Boolean).join(' · ');
-    if (tags && cv.textWidth(tags, 15, { font: 'label' }) > room) {      // a narrow tile: the short words
+    if (tags && cv.textWidth(tags, 19, { font: 'label' }) > room) {      // a narrow tile: the short words
         tags = [lim.thr > 0 && !watch ? '<' + lim.thr + '%' : '', pair.custom ? 'custom' : '', dir < 0 ? 'under' : dir > 0 ? 'over' : ''].filter(Boolean).join(' · ');
     }
-    if (tags && cv.textWidth(tags, 15, { font: 'label' }) <= room) {
-        cv.text(tags, b.x + b.w - 14, b.y + (small ? 30 : 36), 15, lim.thr > 0 && !watch ? t.dim : t.accent2 || t.dim, { align: 'right', font: 'label' });
+    if (tags && cv.textWidth(tags, 19, { font: 'label' }) <= room) {
+        cv.text(tags, b.x + b.w - 14, b.y + (small ? 30 : 36), 19, lim.thr > 0 && !watch ? t.dim : t.accent2 || t.dim, { align: 'right', font: 'label' });
     }
     const ny = small ? b.y + 66 : b.y + 54 + big * 0.8, nx = b.x + 18;
     const at = G.fmt(G.isNum(a) ? sh(a) : null, dec);
     const rest = ' / ' + G.fmt(G.isNum(tg) ? sh(tg) : null, dec) + (pair.custom ? '*' : '') + ' ' + unit;
-    const dtx = G.isNum(dv) ? '  diff ' + (dv > 0 ? '+' : '') + dv.toFixed(dec) : '';       // (the car's fonts have no delta sign)
+    const dtx = G.isNum(dv) ? '  diff ' + diffText(dv, dec) : '';       // (the car's fonts have no delta sign)
     const w1 = cv.text(at, nx, ny, big, flash ? t.crit : t.text, { font: 'num' });
     const w2 = cv.text(rest, nx + w1, ny, sz2, t.dim);
     if (nx + w1 + w2 + cv.textWidth(dtx, sz2, { font: 'bold' }) < b.x + b.w - 12) cv.text(dtx, nx + w1 + w2, ny, sz2, flash ? t.crit : t.dim, { font: 'bold' });
     // the graph
     const gy = small ? ny + 8 : ny + 14, gh = b.y + b.h - 8 - gy;
     if (gh < 40 || !hist) return;
-    const lo = sh(lim.lo), hi = sh(lim.hi), tol = Math.abs(sh(lim.tol));       // (all four scale without an offset)
-    const ys = G.niceStep ? G.niceStep(hi - lo, small ? 2 : 4) : (hi - lo) / 4;
-    const m = G.chart(cv, t, b.x + 8, gy, b.w - 16, gh, { xMin: -PAIR_S, xMax: 0, yMin: lo, yMax: hi, xStep: 10, yStep: ys,
-        xFmt: (v) => (small ? '' : v ? String(-v) : 'now'), padLeft: 44, padBottom: small ? 4 : 22, padTop: small ? 4 : 8, marks: [], series: [] });
+    const tol = Math.abs(sh(lim.tol));       // (all four scale without an offset)
     const pa = hist.series(A, ms).filter((p) => p[0] >= -PAIR_S).map((p) => [p[0], G.isNum(p[1]) ? sh(p[1]) : null]);
     // the target line: the engine unit's history, or the custom target (flat) when that is the one compared with
     const pb = pair.custom ? pa.map((p) => [p[0], sh(pair.target)])
         : hist.series(B, ms).filter((p) => p[0] >= -PAIR_S).map((p) => [p[0], G.isNum(p[1]) ? sh(p[1]) : null]);
+    const r = pairRange(c.id, lim, pa, pb, tol, sh, G, small);
+    const lo = r.lo, hi = r.hi, ys = small ? hi - lo : r.step, fs = small ? 16 : 20;      // a small tile: its low and high only
+    const m = G.chart(cv, t, b.x + 8, gy, b.w - 16, gh, { xMin: -PAIR_S, xMax: 0, yMin: lo, yMax: hi, xStep: 10, yStep: ys, fs,
+        xFmt: (v) => (small ? '' : v ? String(-v) : 'now'), padLeft: small ? 48 : 60, padBottom: small ? 4 : 26, padTop: small ? 6 : 10, marks: [], series: [] });
     const clampY = (v) => m.Y(Math.max(lo, Math.min(hi, v)));
     cv.clip(m.px, m.py - 2, m.pw, m.ph + 4);
     // the tolerance band round the target
@@ -191,6 +205,29 @@ function drawPair(cv, t, G, b, c, now, u, hist, pair) {
     }
     cv.noclip();
     if (!pa.some((p) => G.isNum(p[1]))) cv.text('No data', m.px + m.pw / 2, m.py + m.ph / 2 + 8, 20, t.dim, { align: 'center' });
+}
+
+/**
+ * The graph's range: Graph low / high when set; at their defaults, zoomed round the target and the actual of the
+ * last 30 s (at least 2 tolerances either side of the target), so a miss of a tolerance shows as a clear step.
+ */
+function pairRange(id, lim, pa, pb, tol, sh, G, small) {
+    const D = T.pairDefaults(id), set = lim.lo !== D.lo || lim.hi !== D.hi;
+    const flo = sh(lim.lo), fhi = sh(lim.hi), n = small ? 2 : 4;
+    if (!set) {
+        const vs = [];
+        pa.forEach((p) => { if (G.isNum(p[1])) vs.push(p[1]); });
+        pb.forEach((p) => { if (G.isNum(p[1])) vs.push(p[1] - tol, p[1] + tol); });
+        if (vs.length) {
+            let mn = Math.min.apply(null, vs), mx = Math.max.apply(null, vs);
+            const mid = (mn + mx) / 2, half = Math.max((mx - mn) / 2 * 1.2, 2 * (tol || (fhi - flo) / 40));
+            mn = Math.max(flo, mid - half); mx = Math.min(fhi, mid + half);
+            const step = G.niceStep ? G.niceStep(mx - mn, n) : (mx - mn) / n;
+            const lo = Math.floor(mn / step + 1e-9) * step, hi = Math.ceil(mx / step - 1e-9) * step;
+            if (hi > lo) return { lo, hi, step };
+        }
+    }
+    return { lo: flo, hi: fhi, step: G.niceStep ? G.niceStep(fhi - flo, n) : (fhi - flo) / n };
 }
 
 /**
@@ -220,14 +257,14 @@ function drawCurveTile(cv, t, G, b, u, o) {
     const small = b.h < 200, big = small ? 34 : Math.min(64, Math.round(b.h * 0.2)), sz2 = small ? 17 : 24;
     const name = o.name || c.name;
     cv.text(name, b.x + 18, b.y + (small ? 30 : 36), small ? 18 : 24, t.text, { font: 'bold' });
-    if (o.atText) cv.text(o.atText, b.x + b.w - 14, b.y + (small ? 30 : 36), 15, t.dim, { align: 'right' });
+    if (o.atText) cv.text(o.atText, b.x + b.w - 14, b.y + (small ? 30 : 36), 18, t.dim, { align: 'right' });
     const j = isN(o.at) ? o.at : n - 1, a = A[j], tg = B ? B[j] : null;
     const ny = small ? b.y + 66 : b.y + 54 + big * 0.8, nx = b.x + 18;
     const w1 = cv.text(G.fmt(isN(a) ? sh(a) : null, dec), nx, ny, big, outAt(j) ? t.crit : t.text, { font: 'num' });
     let rest = B ? ' / ' + G.fmt(isN(tg) ? sh(tg) : null, dec) + ' ' + unit : (unit ? ' ' + unit : '');
     const w2 = cv.text(rest, nx + w1, ny, sz2, t.dim);
     if (B && isN(a) && isN(tg)) {
-        const dv = sh(a) - sh(tg), dtx = '  diff ' + (dv > 0 ? '+' : '') + dv.toFixed(dec);
+        const dv = sh(a) - sh(tg), dtx = '  diff ' + diffText(dv, dec);
         if (nx + w1 + w2 + cv.textWidth(dtx, sz2, { font: 'bold' }) < b.x + b.w - 12) cv.text(dtx, nx + w1 + w2, ny, sz2, outAt(j) ? t.crit : t.dim, { font: 'bold' });
     }
     // the graph against the x axis
@@ -294,7 +331,7 @@ function tileSheet(o) {
         armed() { return Date.now() - this.armedAt < 5000; },
         extras() {
             const L = o.limits ? o.limits() : null, A = o.alarms ? o.alarms() : null;
-            return (L ? T.LIMIT_KEYS.filter((k) => k in L).map((k) => ({ id: 'lim:' + k, label: T.LIMIT_NAMES[k], value: o.fmtLimit(k, L[k]), kind: 'more' })) : [])
+            return (o.resetPeaks ? [{ id: 'peaks', label: 'Reset the max values (all tiles)' }] : []).concat(L ? T.LIMIT_KEYS.filter((k) => k in L).map((k) => ({ id: 'lim:' + k, label: T.LIMIT_NAMES[k], value: o.fmtLimit(k, L[k]), kind: 'more' })) : [])
                 .concat(A ? T.ALARM_KEYS.filter((k) => k in A).map((k) => ({ id: 'al:' + k, label: T.ALARM_NAMES[k], value: A[k] === null ? 'Off' : o.fmtLimit(k, A[k]), kind: 'more' })) : [])
                 .concat(o.layout ? [{ id: LAYOUT, label: 'Page layout', value: T.layout(o.layout).name, kind: 'more' }] : [])
                 .concat(o.add ? [{ id: 'add', label: 'Add a gauge page' }] : [])
@@ -398,6 +435,7 @@ function tileSheet(o) {
             }
             if (x.id === LAYOUT) { this.open = LAYOUT; this.sub = Math.max(0, T.LAYOUTS.map((l) => l.id).indexOf(o.layout)); return null; }
             if (x.id === 'add') { o.add(); return 'close'; }
+            if (x.id === 'peaks') { o.resetPeaks(); return 'close'; }
             if (x.id === 'remove') {
                 if (this.armed()) { o.remove(); return 'close'; }
                 this.armedAt = Date.now();

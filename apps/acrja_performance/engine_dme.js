@@ -95,7 +95,9 @@ const NAMES = {
 // this counts as none. Gaps (the unit stops answering for a while): asked again after GAP_MIN_MS, doubling to GAP_MAX_MS,
 // keeping what it has; quiet for REPROBE_MS, it is asked which values it has again.
 // (seen on a G-series car: one request takes about 200 ms over the head unit's link, so every request counts)
-const SLOW_MS = 3000, SLOW_STALE_MS = 10000, AMBIENT_STALE_MS = 120000, RETRY_MS = 10000, STALE_MS = 3000, MIN_ROUND_MS = 50, GAP_MIN_MS = 500, GAP_MAX_MS = 5000, REPROBE_MS = 60000;
+const SLOW_MS = 3000, SLOW_STALE_MS = 10000, AMBIENT_STALE_MS = 120000, RETRY_MS = 10000, STALE_MS = 3000, MIN_ROUND_MS = 50, GAP_MIN_MS = 500, GAP_MAX_MS = 5000, REPROBE_MS = 60000, NOREPLY_RETRY_MS = 15000;
+// NOREPLY_RETRY_MS: a value that gave no reply when the unit was first asked (busy, not woken yet) is asked again this often,
+// alone, while the rest are read; once it answers it joins its group. A refused value is not asked again (until reprobe()).
 
 /** One identifier's raw bytes -> its value, or null (no data). */
 function decode(id, bytes) {
@@ -179,6 +181,7 @@ class EngineDme {
     constructor(opts) {
         this.link = opts.link; this.log = opts.log || { info() {}, warn() {} };
         this.wanted = opts.wanted || (() => true);
+        this.retryMs = opts.noReplyRetryMs || NOREPLY_RETRY_MS; this.missing = [];
         this.raw = {}; this.t = {}; this.status = 'off'; this.have = null; this.fast = []; this.slow = [];
         this.running = false; this.lastSlow = 0; this.triedAt = 0; this.reads = []; this.rate = 0;
         // health, for the Check page: gaps (the unit went quiet and came back), request errors, loop restarts
@@ -199,7 +202,7 @@ class EngineDme {
     }
     stop() { this.running = false; }
     /** Ask which values the engine has again, now (the Check page's button). */
-    reprobe() { this.obdEthanol = undefined; this.obdMiss = 0; this.ethanolFrom = null; this.have = null; this.triedAt = 0; this.status = 'off'; this.quietSince = null; this.gap = GAP_MIN_MS; if (this.link.wake) this.link.wake(DME); }
+    reprobe() { this.missing = []; this.obdEthanol = undefined; this.obdMiss = 0; this.ethanolFrom = null; this.have = null; this.triedAt = 0; this.status = 'off'; this.quietSince = null; this.gap = GAP_MIN_MS; if (this.link.wake) this.link.wake(DME); }
     /** For the Check page: gaps, request errors, restarts, the last error, ms since the last answer. */
     health() {
         return { gaps: this.gaps, errors: this.errors, restarts: this.restarts, lastError: this.lastError, since: this.lastReply ? Date.now() - this.lastReply : null,
@@ -275,7 +278,7 @@ class EngineDme {
     async _probe() {
         this.status = 'probing';
         const have = [];
-        this.answer = {};
+        this.answer = {}; this.missing = [];
         for (const g of GROUPS) {
             for (const id of g.ids) {
                 let ok = await this._ask([id]);
@@ -284,11 +287,44 @@ class EngineDme {
                 const alt = DIDS[id].alt;
                 if (alt) {
                     ok = await this._ask([alt]);
-                    if (ok && ok[alt] !== undefined) { have.push(alt); this.answer[alt] = 'yes'; } else this.answer[alt] = ok === null ? 'no reply' : 'refused';
+                    if (ok && ok[alt] !== undefined) { have.push(alt); this.answer[alt] = 'yes'; continue; }
+                    this.answer[alt] = ok === null ? 'no reply' : 'refused';
                 }
+                // no reply (to it, or to its alternative): ask again later
+                if (this.answer[id] === 'no reply') this.missing.push(id);
+                else if (alt && this.answer[alt] === 'no reply') this.missing.push(alt);
             }
         }
         return have;
+    }
+    /** Each group: the identifiers it has (an alternative in its original's group). */
+    _groups() {
+        const have = this.have;
+        const last = {};
+        (this.groups || []).forEach((g) => { last[g.name] = g.last; });
+        this.groups = GROUPS.map((g) => ({ name: g.name, fast: !!g.fast, weight: g.weight || 1, last: last[g.name] || 0,
+            ids: have.filter((id) => g.ids.indexOf(id) >= 0 || g.ids.indexOf(alternativeOf(id)) >= 0) })).filter((g) => g.ids.length);
+        this.fast = [].concat.apply([], this.groups.filter((g) => g.fast).map((g) => g.ids));
+        this.slow = [].concat.apply([], this.groups.filter((g) => !g.fast).map((g) => g.ids));
+    }
+    /** The values with no reply so far, each alone (and its alternative): an answer joins the reading, a refusal drops it. */
+    async _askMissing() {
+        const still = [];
+        for (const id of this.missing) {
+            if (!this.running) return;
+            const ok = await this._ask([id]);
+            if (ok && ok[id] !== undefined) {
+                this.answer[id] = 'yes'; this._put(ok, Date.now());
+                if (this.have.indexOf(id) < 0) this.have.push(id);
+                this.log.info('engine unit: ' + id + ' answers now');
+                continue;
+            }
+            if (ok !== null) { this.answer[id] = 'refused'; continue; }   // it answered: not this value
+            still.push(id);
+        }
+        const added = this.missing.length - still.length;
+        this.missing = still;
+        if (added) this._groups();
     }
     async _loop() {
         let turn = 0;
@@ -301,14 +337,15 @@ class EngineDme {
                 const have = await this._probe();
                 this.have = have;
                 if (!have.length) { this.status = 'no answer'; this.log.info('engine unit: no answer to its values (another engine, or the ignition off?)'); continue; }
-                this.quietSince = null; this.gap = GAP_MIN_MS; this.lastReply = Date.now();
-                // each group: the identifiers it has (an alternative in its original's group)
-                this.groups = GROUPS.map((g) => ({ name: g.name, fast: !!g.fast, weight: g.weight || 1, last: 0,
-                    ids: have.filter((id) => g.ids.indexOf(id) >= 0 || g.ids.indexOf(alternativeOf(id)) >= 0) })).filter((g) => g.ids.length);
-                this.fast = [].concat.apply([], this.groups.filter((g) => g.fast).map((g) => g.ids));
-                this.slow = [].concat.apply([], this.groups.filter((g) => !g.fast).map((g) => g.ids));
+                this.quietSince = null; this.gap = GAP_MIN_MS; this.lastReply = Date.now(); this.missedAt = Date.now();
+                this._groups();
                 this.status = 'reading';
-                this.log.info('engine unit: reading ' + have.join(' '));
+                this.log.info('engine unit: reading ' + have.join(' ') + (this.missing.length ? ' (no reply yet: ' + this.missing.join(' ') + ')' : ''));
+            }
+            // values that gave no reply at first: asked again, one at a time, every 15 s
+            if (this.missing && this.missing.length && this.quietSince === null && Date.now() - this.missedAt >= this.retryMs) {
+                this.missedAt = Date.now();
+                await this._askMissing();
             }
             // fast mode: the main group only, in turn; the ignition group joins the slow ones (less often)
             const fm = this._fastNow();

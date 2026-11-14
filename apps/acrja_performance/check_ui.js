@@ -22,7 +22,7 @@ const ago = (ms) => (!isNum(ms) ? 'never' : ms < 1500 ? 'now' : ms < 60000 ? Mat
 function drawCheck(cv, t, G, o) {
     // car signals
     G.panel(cv, t, 24, 44, 560, 468, 'Car signals');
-    cv.text('LAST CHANGE', 564, 110, 15, t.dim, { align: 'right', font: 'bold', spacing: 1.5 });
+    cv.text('LAST CHANGE', 564, 110, 17, t.dim, { align: 'right', font: 'bold', spacing: 1.5 });
     o.signals.forEach((s, i) => {
         const y = 146 + i * 34, seen = isNum(s.age);
         cv.circle(52, y - 7, 6, seen ? '#2fd27a' : t.crit);
@@ -30,8 +30,8 @@ function drawCheck(cv, t, G, o) {
         cv.text(s.value, 420, y, 22, seen ? t.text : t.dim, { align: 'right' });
         cv.text(ago(s.age), 564, y, 18, t.dim, { align: 'right' });
     });
-    if (o.credit) cv.text(o.credit, 44, 470, 15, t.dim);
-    cv.text(o.demo ? 'Demo data is on: the values above are the car\'s own, or none' : 'Green: a value has come. Red: none yet (or this car lacks it).', 44, 500, 17, t.dim);
+    if (o.credit) cv.text(o.credit, 44, 478, 15, t.dim);
+    cv.text(o.demo ? 'Demo data is on: the values above are the car\'s own, or none' : 'Green: a value has come. Red: none yet (or this car lacks it).', 44, 504, 17, t.dim);
 
     // engine unit
     const L = o.link || {};
@@ -39,8 +39,15 @@ function drawCheck(cv, t, G, o) {
     LOGO.draw(cv, 'mark', 1576 - 20 - LOGO.size('mark').w, 62);
     let head, col = t.text;
     if (o.setting === 'off') { head = 'Off in Settings (Engine unit values)'; col = t.dim; } else if (o.demo) { head = 'Demo data: the engine unit is not asked'; col = t.warn; } else if (!L.ready) { head = 'Diagnostic link starting' + (L.error ? ': ' + L.error : ''); col = t.warn; } else if (o.status === 'reading') head = 'Reading ' + (isNum(o.rate) ? o.rate.toFixed(1) : '--') + ' times a second'; else if (o.status === 'no answer') { head = o.have ? 'No answer for ' + Math.round((o.health && o.health.since || 0) / 1000) + ' s: asking again' : 'No answer: another engine, or the ignition off? Asked again every 10 s'; col = t.crit; } else head = o.status === 'probing' ? 'Asking which values this engine has ...' : 'Waiting (asked while the app is shown)';
-    cv.text(head, 620, 108, 21, col);
-    cv.text('requests ' + (L.sent || 0) + '  ·  replies ' + (L.replies || 0) + '  ·  none ' + (L.missed || 0), 1556, 108, 17, t.dim, { align: 'right' });
+    // in plain words: how many values answer (the list below is for technicians)
+    const rep = o.report || [], yes = rep.filter((r) => r.answer === 'yes').length, nr = rep.filter((r) => r.answer === 'no reply').length;
+    const lacks = rep.filter((r) => r.answer === 'refused').length;
+    if (o.status === 'reading' && L.ready && !o.demo && o.setting !== 'off') {
+        head = (nr ? '' : 'All good  ·  ') + yes + ' values answering' + (nr ? '  ·  ' + nr + ' not yet (asked again)' : '') + (lacks ? '  ·  ' + lacks + ' not on this engine' : '');
+        col = nr ? t.warn : '#2fd27a';
+    }
+    cv.text(head, 620, 110, 22, col, { font: 'bold' });
+    if (o.status === 'reading' && isNum(o.rate)) cv.text(o.rate.toFixed(1) + ' updates a second', 1556, 110, 19, t.dim, { align: 'right' });
     const rows = o.report || [], half = Math.ceil(rows.length / 2), rh = Math.min(26, Math.floor(296 / Math.max(1, half)));
     rows.forEach((r, i) => {
         const x = i < half ? 620 : 1100, y = 144 + (i % half) * rh;
@@ -73,9 +80,9 @@ function drawCheck(cv, t, G, o) {
         if (cv.own) cv.target(fx - 4, fy - 4, fw + 8, fh + 8, o.fuel, 'check:fuel');
     }
     const H = o.health;
-    if (H) cv.text((isNum(H.latency) ? Math.round(H.latency) + ' ms a request' + (H.fast ? ' · fast mode' : '') + '  ·  ' : '') + 'Dropouts ' + H.gaps + '  ·  request errors ' + H.errors + '  ·  restarts ' + H.restarts + (H.lastError ? '  ·  last: ' + String(H.lastError).slice(0, 40) : ''),
-        620, 474, 16, H.gaps || H.errors || H.restarts ? t.warn : t.dim);
-    cv.text('Green: answered  ·  amber: refused (this engine lacks it)  ·  red: no reply  ·  grey: not asked yet', 620, 500, 16, t.dim);
+    if (H) cv.text((isNum(H.latency) ? Math.round(H.latency) + ' ms a request' + (H.fast ? ' · fast mode' : '') + '  ·  ' : '') + 'Dropouts ' + H.gaps + '  ·  errors ' + H.errors + '  ·  restarts ' + H.restarts + '  ·  requests ' + (L.sent || 0) + ' / replies ' + (L.replies || 0) + (H.lastError ? '  ·  last: ' + String(H.lastError).slice(0, 30) : ''),
+        620, 476, 17, H.gaps || H.errors || H.restarts ? t.warn : t.dim);
+    cv.text('Green answered  ·  amber not on this engine  ·  red no reply (asked again every 15 s)  ·  grey not asked', 620, 502, 19, t.dim);
 }
 
 module.exports = { drawCheck };

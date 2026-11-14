@@ -17,6 +17,7 @@
  * The drawing is the only iDrive 7-specific part: logger.js and session.js have no drawing
  * and no head-unit APIs, so an iDrive 8 version keeps them and replaces this file.
  */
+const fs = require('fs');
 const path = require('path');
 const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
@@ -43,8 +44,12 @@ const { MapNames, renameSheet } = require('./map_names');
 const { PinLock } = require('./pin');                // the Tune page's PIN (from the kit's Live Adjustments)
 const { Gearbox } = require('./gearbox');            // gearbox oil temperature (from the kit's Warm-Up)
 const FUEL = require('./fuel_ui');
+const WARN = require('./warnings');           // a flash limit crossed: the banner on every page, the box on the cluster
 const USB = require('./usb');                     // the car's USB stick: logs, set-up export / import
 const USB_UI = require('./usb_ui');
+const SETUP = require('./setup_ui');
+const FILE_UI = require('./file_ui');          // Files page > a log tapped: its summary, Delete this file
+const LOGSUM = require('./log_summary');            // the first start: units, tuning software, logging by itself
 const APP_VERSION = (() => { for (const f of ['../package.json', './app.json']) { try { return require(f).version; } catch (e) { /* next */ } } return '?'; })();
 
 const W = 1600, H = 520;
@@ -53,11 +58,16 @@ mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
         // the car's own signals, and the pedal and outside temperature beside them
-        const ext = { pedal: null, outside: null };
+        const ext = { pedal: null, outside: null, odo: null };
         const car = new Car(ctx, ['rpm', 'speed', 'temps', 'accel', 'torque', 'gear'], {
             'de.bmw.powertrain.AcceleratorPedal': { AngleAcceleratorPedal: (v) => {
                 const x = v && v.actualValueAngleAcceleratorPedal;
                 ext.pedal = typeof x === 'number' && x * 0.025 >= -2 && x * 0.025 <= 102 ? Math.max(0, Math.min(100, x * 0.025)) : null;
+            } },
+            // the odometer, for Fuel quality's distance since refuelling
+            'de.bmw.infotainment.KombiIF': { statusRangeTankStatus: (v) => {
+                const x = v && v.mileageKilometre;
+                if (typeof x === 'number' && x > 0 && x < 16777215) ext.odo = x;
             } },
             'de.bmw.infrastructure.EnvironmentalInformation': { ExteriorTemperature: (v) => {
                 const x = v && v.temperatureExterior;
@@ -110,7 +120,7 @@ mgu.run({
             return logger.status().on || k === 'drag' || k === 'dyno' || (drag && drag.state === 'run') || (dyno && dyno.state === 'pull');
         };
         const dme = new EDME.EngineDme({ link, log, fast: fastMode, wanted: () => settings.get('engineData') !== 'off' && !car.data().demo && !tune.busy &&
-            (ui.isVisible('MAIN') || logger.status().on || (drag && drag.state === 'run') || (dyno && dyno.state === 'pull')) });
+            (ui.isVisible('MAIN') || logger.status().on || (drag && drag.state === 'run') || (dyno && dyno.state === 'pull') || watchInBackground()) });
         const misCount = new S.MisfireCount();
         // for the Check page: when each of the car's own signals last changed (demo data or not)
         // [name, key, decimals, quantity (units.js-style: shown in the chosen unit) or a fixed unit]
@@ -151,6 +161,9 @@ mgu.run({
         const logger = new Logger({ dir: path.join(ctx.dataDir, 'logs'), columns: S.COLUMNS, maxFiles: settings.get('maxFiles'), log });
         const auto = new S.AutoLog();
         const hist = new S.History(60, 200);
+        // a first start (no pages saved yet): the set-up sheet after the start-up screen; an older install has its settings
+        const firstStart = !fs.existsSync(path.join(ctx.dataDir, 'pages.json'));
+        if (!firstStart && !settings.get('setupDone')) settings.set('setupDone', true);
         const pages = new T.Pages(path.join(ctx.dataDir, 'pages.json'), log);
         let page = 0, files = logger.list(), filesAt = 0;
 
@@ -269,12 +282,42 @@ mgu.run({
             const al = alarms[key] || (alarms[key] = new T.Alarm({ holdIn: 0, holdOut: 1500 }));
             return { alarm: A, ms, flash: al.feedLimits(now[id], A.ahi, A.alo, ms) };
         }
+        /* ---------- warnings: every flash limit, on every page and on the cluster ---------- */
+        const warnings = new WARN.Warnings({ T });
+        const peaks = new T.Peaks();                     // the max values shown on the tiles, since the last reset
+        const cluster = new WARN.ClusterAlert(log, 'acrja_performance');
+        /** Every single-value tile with a flash limit, on any gauge page and the Drag page. */
+        function warnSources() {
+            const out = [];
+            const add = (pg, prefix) => pg.tiles.forEach((id, i) => {
+                const c = id && T.BY_ID[id];
+                if (!c || c.pair || !T.ALARMS[id]) return;
+                const A = T.alarmsOf(pg, i);
+                if (A && (T.isNum(A.ahi) || T.isNum(A.alo))) out.push({ key: prefix + ':' + i + ':' + id, id, A });
+            });
+            pages.list.forEach((pg, n) => add(pg, 'w' + n));
+            if (pages.drag) add(pages.drag, 'wd');
+            return out;
+        }
+        /** Watched with the app in the background too (Settings > Warnings on the cluster: Always): engine values among them. */
+        function watchInBackground() {
+            return settings.get('clusterWarn') === 'always' && warnSources().some((s) => (T.BY_ID[s.id] || {}).group === 'Engine unit');
+        }
+        setInterval(() => {
+            try {
+                const d = data(), ms = Date.now(), all = T.readAll(d), list = warnings.feed(warnSources(), all, ms);
+                if (!d.demo || ui.isVisible('MAIN')) peaks.feed(all);
+                const mode = settings.get('clusterWarn');
+                if (cluster) cluster.show(mode === 'off' || (mode === 'shown' && !ui.isVisible('MAIN')) ? [] : list, unitsNow(), T, ctx.theme(), ms);
+            } catch (e) { log.warn('warnings: ' + e); }
+        }, 250);
         function drawGauges(cv, t) {
             const pg = pages.list[page], u = unitsNow(), now = T.readAll(data()), bx = UI.boxes(pg.layout), ms = Date.now();
+            peaks.feed(now);
             const marked = edit ? editItem().tile : -1;
             bx.forEach((b, i) => {
                 const id = pg.tiles[i], pair = tileState(pg, i, id, now, ms, String(page));
-                UI.drawTile(cv, t, G, b, id, now, u, hist, marked === i, pair);
+                UI.drawTile(cv, t, G, b, id, now, u, hist, marked === i, pair, peaks.get(id));
                 // a tile tapped (or pressed with the controller): its sheet
                 if (cv.own && !edit) cv.target(b.x, b.y, b.w, b.h, () => openTile(i), 'tile:' + page + ':' + i);
             });
@@ -383,6 +426,7 @@ mgu.run({
                 layout: pg.layout, setLayout: (id) => { pages.setLayout(p, id); refresh(); },
                 add: pages.list.length < T.MAX_PAGES ? () => { if (pages.add()) { page = pages.list.length - 1; refresh(); } } : null,
                 remove: pages.list.length > 1 ? () => { pages.remove(p); page = Math.min(page, pages.list.length - 1); refresh(); } : null,
+                resetPeaks: () => { peaks.reset(); log.info('max values reset'); refresh(); },
             });
             if (!(ctx.sheet && ctx.sheet(sh))) startEdit(i);
         }
@@ -390,11 +434,12 @@ mgu.run({
         function drawLogger(cv, t) {
             const st = logger.status(), now = Date.now();
             G.panel(cv, t, 24, 44, 640, 468, 'Logger');
-            LOGO.draw(cv, 'mark', 664 - 20 - 200 - 24 - LOGO.size('mark').w, 62);
-            G.button(cv, t, 664 - 20 - 200, 56, 200, 40, st.on ? 'Stop log' : 'Start log', toggleLog, { key: 'log', primary: !st.on, color: st.on ? t.crit : null });
+            LOGO.draw(cv, 'mark', 664 - 20 - LOGO.size('mark').w, 62);
             G.pill(cv, t, 48, 112, 170, 36, st.on ? 'RECORDING' : 'STOPPED', { color: st.on ? t.crit : t.dim, filled: st.on ? 0.25 : 0.08 });
-            const w = cv.text(st.on ? S.duration(now - st.startedAt) : '--:--', 48, 238, 96, st.on ? t.text : t.dim, { font: 'num' });
-            if (st.on) cv.text('elapsed', 60 + w, 238, 24, t.dim);
+            // the elapsed time, big, and a big Start / Stop beside it (touch; the bar's Start log too)
+            const w = cv.text(st.on ? S.duration(now - st.startedAt) : '0:00', 48, 238, 96, st.on ? t.text : t.dim, { font: 'num' });
+            if (56 + w + 140 < 396) cv.text(st.on ? 'elapsed' : 'not recording', 56 + w, 238, 22, t.dim);
+            G.button(cv, t, 400, 166, 240, 76, st.on ? 'Stop' : 'Start', toggleLog, { key: 'log', primary: true, color: st.on ? t.crit : null });
             const rows = [
                 ['Rows', st.on ? String(st.rows) : '--'],
                 ['File size', st.on ? S.size(st.bytes) : '--'],
@@ -435,8 +480,19 @@ mgu.run({
             G.table(cv, t, 48, 116, 1504, [{ label: 'File', w: 760 }, { label: 'Last written', w: 340 }, { label: 'Size', w: 200, align: 'right' }, { label: '', w: 204, align: 'right', color: 'crit' }],
                 rows, { empty: 'No logs yet. Start one on the Logger page.' });
             if (files.length > 9) cv.text('+ ' + (files.length - 9) + ' older', 48, 500, 20, t.dim);
+            else if (files.length && files.length <= 8 && cv.own) cv.text('Tap a file to see what is in it, or to delete it', 48, 500, 20, t.dim);
+            // each row a target: the file's summary (G.table's rows: from 30 px under its top, 40 px each)
+            if (cv.own) files.slice(0, 9).forEach((f, i) => cv.target(48, 116 + 30 + i * 40, 1504, 40, () => openFile(f), 'file:' + f.name));
         }
 
+        function openFile(f) {
+            const sh = FILE_UI.fileSheet({ file: f, path: path.join(ctx.dataDir, 'logs', f.name), summarize: LOGSUM.summarize, size: S.size,
+                recording: f.name === logger.status().file,
+                remove: () => { const ok = logger.deleteOne(f.name); if (ok) log.info('log deleted: ' + f.name); return ok; },
+                onDone: () => { files = logger.list(); filesAt = Date.now(); refresh(); } });
+            if (!(ctx.sheet && ctx.sheet(sh))) log.info('log summary: needs the full-screen renderer (touch)');
+            return null;
+        }
         /** Files page > USB stick: copy the logs; export / import the set-up (tiles, pages, settings, map names). */
         function openUsb() {
             const sh = USB_UI.usbSheet({ usb: USB,
@@ -499,7 +555,8 @@ mgu.run({
             pin: tune.armed && pin.locked() ? pin.view('The Tune page') : null }), tuneActs);
         /** Check page > Fuel quality: the engine unit's adapted octane, time since refuelling and refuelling history (asked once). */
         function openFuel() {
-            const sh = FUEL.fuelSheet({ get: () => (car.data().demo ? Promise.resolve(FUEL.DEMO) : dme.fuelQuality()), now: () => data().dme, units: unitsNow, onDone: () => refresh() });
+            const sh = FUEL.fuelSheet({ get: () => (car.data().demo ? Promise.resolve(FUEL.DEMO) : dme.fuelQuality()), now: () => data().dme, units: unitsNow,
+                ethanolFrom: () => (car.data().demo ? 'engine unit' : dme.ethanolFrom), odometer: () => (car.data().demo ? 41300 : ext.odo), onDone: () => refresh() });
             if (!(ctx.sheet && ctx.sheet(sh))) log.info('fuel quality: needs the full-screen renderer (touch)');
             return null;
         }
@@ -525,7 +582,8 @@ mgu.run({
         // auto: live tiles while armed or running, the summary when the run is over; live / last: pinned
         let dragView = 'auto';
         const VIEWS = ['auto', 'live', 'last'], VIEW_NAMES = { auto: 'Auto', live: 'Live', last: 'Last' };
-        const dragLive = () => dragView === 'live' || (dragView === 'auto' && (drag.state === 'run' || drag.state === 'ready'));
+        // Auto: the live tiles while armed or running, and before the first run (nothing to sum up yet); after a run its summary
+        const dragLive = () => dragView === 'live' || (dragView === 'auto' && (drag.state === 'run' || drag.state === 'ready' || !drag.lastRun));
         function cycleDragView() { dragView = VIEWS[(VIEWS.indexOf(dragView) + 1) % VIEWS.length]; refresh(); return null; }
         function setDragView(v) { dragView = v; refresh(); return null; }
         /** Auto / Live / Last at the panel's top right, the one in use lit; each a touch target (the bar's Panel: button steps them). */
@@ -593,6 +651,7 @@ mgu.run({
             // the first moments: ACR's start-up screen (no tabs, no targets), then the pages
             if (BRAND.splashing()) { BRAND.drawSplash(cv, t); await ui.image('MAIN_GFX', cv); return; }
             ({ gauges: drawGauges, drag: drawMode, dyno: drawMode, tune: drawTunePage, logger: drawLogger, files: drawFiles, check: drawCheck })[kindOf()](cv, t);
+            if (warnings.bannerOn()) WARN.drawBanner(cv, t, warnings.list, unitsNow(), T, Date.now(), () => { warnings.snooze(60000); return refresh(); });
             G.frame(cv, t, tabs(), tabOf(), [st.on && { text: 'REC ' + S.duration(Date.now() - st.startedAt), color: 'crit' }, car.data().demo && { text: 'DEMO' }]);
             await ui.image('MAIN_GFX', cv);
         }
@@ -654,6 +713,12 @@ mgu.run({
         startTune();                            // nothing at all while Tuning software is Off
         ctx.loop('MAIN', 10, render);
         refresh().then(() => log.info('first frame done'));
-        setTimeout(() => refresh(), BRAND.SPLASH_MS + 50);      // the pages after the start-up screen (also without the loop running)
+        setTimeout(() => {
+            refresh();                                          // the pages after the start-up screen (also without the loop running)
+            if (!settings.get('setupDone') && ctx.sheet) {
+                const ok = ctx.sheet(SETUP.setupSheet({ get: (k) => settings.get(k), set: (k, v) => settings.set(k, v), onDone: () => refresh() }));
+                if (ok) log.info('first start: set-up sheet');
+            }
+        }, BRAND.SPLASH_MS + 50);
     },
 });

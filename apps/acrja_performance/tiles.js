@@ -87,12 +87,12 @@ const VALUES = [
     { id: 'afrTarget', name: 'AFR target', group: 'Engine unit', metric: (d) => dme(d, 'afrTarget'), unit: () => ':1', dec: 1, range: (u) => [(u.stoich || 14.7) * 0.7, (u.stoich || 14.7) * 1.15] },
     { id: 'lambda', name: 'Lambda', group: 'Engine unit', metric: (d) => dme(d, 'lambda'), unit: () => '', dec: 2, range: () => [0.7, 1.15], zones: () => [{ from: 0.93, to: 9, color: 'warn' }] },
     { id: 'lambdaTarget', name: 'Lambda target', group: 'Engine unit', metric: (d) => dme(d, 'lambdaTarget'), unit: () => '', dec: 2, range: () => [0.7, 1.15] },
-    { id: 'knock', name: 'Knock retard', group: 'Engine unit', metric: (d) => dme(d, 'knock'), unit: () => '°', dec: 1, range: () => [0, 6],
+    { id: 'knock', name: 'Knock retard', group: 'Engine unit', metric: (d) => dme(d, 'knock'), unit: () => 'deg', dec: 1, range: () => [0, 6],
         zones: () => [{ from: 1.5, to: 3, color: 'warn' }, { from: 3, to: 99, color: 'crit' }] },
     { id: 'misfires', name: 'Misfires', group: 'Engine unit', metric: (d) => d.misfires, unit: () => '', dec: 0, range: () => [0, 50],
         zones: () => [{ from: 1, to: 99999, color: 'crit' }] },
-    { id: 'timing', name: 'Ignition timing', group: 'Engine unit', metric: (d) => dme(d, 'timing'), unit: () => '°', dec: 1, range: () => [-10, 50] },
-    { id: 'timingSpread', name: 'Timing spread', group: 'Engine unit', metric: (d) => dme(d, 'timingSpread'), unit: () => '°', dec: 1, range: () => [0, 6],
+    { id: 'timing', name: 'Ignition timing', group: 'Engine unit', metric: (d) => dme(d, 'timing'), unit: () => 'deg', dec: 1, range: () => [-10, 50] },
+    { id: 'timingSpread', name: 'Timing spread', group: 'Engine unit', metric: (d) => dme(d, 'timingSpread'), unit: () => 'deg', dec: 1, range: () => [0, 6],
         zones: () => [{ from: 2, to: 4, color: 'warn' }, { from: 4, to: 99, color: 'crit' }] },
     { id: 'wastegate', name: 'Wastegate position', group: 'Engine unit', metric: (d) => dme(d, 'wastegate'), unit: () => '%', dec: 0, range: () => [0, 100] },
     { id: 'chargeAir', name: 'Charge air (before throttle)', group: 'Engine unit', metric: (d) => dme(d, 'chargeAir'), show: (v, u) => (u.temp === 'f' ? cToF(v) : v),
@@ -388,4 +388,14 @@ class Pages {
     }
 }
 
-module.exports = { limitText, pairTarget, outOfTol, pairDefaults, ALARMS, ALARM_KEYS, ALARM_NAMES, alarmsOf, DRAG_DEFAULT, SYSTEMS, resolveUnits, CONV, conv, unitOf, PAIRS, LIMIT_KEYS, LIMIT_NAMES, limitsOf, Alarm, decOf, VALUES, BY_ID, LAYOUTS, MAX_PAGES, MAX_SLOTS, DEFAULTS, layout, nextLayout, readAll, show, gearText, powerKw, Pages, isNum };
+/** Values whose highest since the last reset is kept and shown on their tile ("max 1.32"); the rest have none. */
+const PEAK_IDS = ['rpm', 'speed', 'coolant', 'oil', 'gearboxOil', 'torque', 'power', 'g', 'gLong', 'gLat', 'boost', 'rail', 'knock',
+    'misfires', 'timingSpread', 'wastegate', 'chargeAir', 'intake'];
+class Peaks {
+    constructor() { this.max = {}; this.since = Date.now(); }
+    feed(now) { PEAK_IDS.forEach((id) => { const v = now[id]; if (isNum(v) && !(this.max[id] >= v)) this.max[id] = v; }); }
+    get(id) { return PEAK_IDS.indexOf(id) >= 0 && isNum(this.max[id]) ? this.max[id] : null; }
+    reset() { this.max = {}; this.since = Date.now(); }
+}
+
+module.exports = { PEAK_IDS, Peaks, limitText, pairTarget, outOfTol, pairDefaults, ALARMS, ALARM_KEYS, ALARM_NAMES, alarmsOf, DRAG_DEFAULT, SYSTEMS, resolveUnits, CONV, conv, unitOf, PAIRS, LIMIT_KEYS, LIMIT_NAMES, limitsOf, Alarm, decOf, VALUES, BY_ID, LAYOUTS, MAX_PAGES, MAX_SLOTS, DEFAULTS, layout, nextLayout, readAll, show, gearText, powerKw, Pages, isNum };
