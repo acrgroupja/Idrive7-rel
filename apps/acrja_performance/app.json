@@ -1,8 +1,8 @@
 {
   "id": "acrja_performance",
   "title": "ACR Performance",
-  "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes",
-  "version": "0.13.7",
+  "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes; experimental: xDrive off until the ignition cycle (behind its own setting)",
+  "version": "0.13.8",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -49,6 +49,10 @@
     "de.bmw.infotainment.KombiIF": {
       "_optional": "odometer (Fuel quality: distance since refuelling)",
       "statusRangeTankStatus": "rs"
+    },
+    "de.bmw.infrastructure.VehicleCondition": {
+      "_optional": "xDrive page: ignition on / READY (the DSC's conditions)",
+      "VehicleCondition": "s"
     }
   },
   "screens": [
@@ -420,6 +424,22 @@
       "type": "object",
       "default": {},
       "hidden": true
+    },
+    {
+      "key": "xdrive",
+      "label": "xDrive off switch (experimental)",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        [
+          "off",
+          "Off · nothing is sent (safe)"
+        ],
+        [
+          "on",
+          "On · xDrive page: xDrive off until the ignition is switched off"
+        ]
+      ]
     },
     {
       "key": "rollout",
