@@ -10,11 +10,14 @@
  *                   and their SGBD index (what BMW's diagnostic tools identify a unit by)
  *   0x01 / 0x09     OBD-II current data / vehicle information, one PID, to one unit
  *   0x06            OBD-II on-board monitoring test results, one monitor id, to one unit (ACR: misfire counts)
+ *   0x19 02 <mask>  ReadDTCInformation, the fault codes by status mask, to one unit or to all units at once
+ *                   (functional 0xDF; scanDtcs()). Only sub-function 02 with exactly one mask byte (ACR: fault codes)
  *
  * Anything else throws before it reaches the transport: sessions (10), resets (11), clearing
- * faults (14), security access (27), communication control (28), dynamic identifiers (2C),
- * writes (2E), I/O control (2F), routines (31), downloads (34-37), tester present (3E), DTC
- * settings (85), any functional request but 22 F1 50, and a physical request to 0xDF.
+ * faults (14), any other 19 sub-function (snapshots 04, extended data 06, ...), security access (27),
+ * communication control (28), dynamic identifiers (2C), writes (2E), I/O control (2F), routines (31),
+ * downloads (34-37), tester present (3E), DTC settings (85), any functional request but 22 F1 50 and
+ * 19 02 <mask>, and a physical request to 0xDF.
  *
  * It also paces: one request at a time and at least gapMs between two (25 ms), a 1 s pause after a
  * unit answers busy (NRC 21), and a unit that didn't answer silentAfter requests in a row is skipped
@@ -30,11 +33,15 @@
  *   link.readMany(0x12, [0x4402, 0x586F])        // several identifiers in one request: 62 44 02 <data> 58 6F <data>
  *   new DidReader(link, { ecu: 0x12 })           // kit/dids.js works on top of it (physical())
  *   link.cancel()                                // drop what is still queued (page left)
+ *   await link.scanDtcs({ mask: 0x0C })           // 19 02 0C to all units: Map(address -> reply 59 02 ... / 7F 19 ..)
  */
 const { Diag, hex, NRC, ALL } = require('./diag');
 
 // (ACR: 0x06 added, read only: an S63's misfire counts are only in its second engine unit's monitor results)
-const READ = Object.freeze({ 0x22: 'ReadDataByIdentifier', 0x01: 'OBD current data', 0x06: 'OBD on-board monitoring', 0x09: 'OBD vehicle information' });
+// (ACR: 0x19 added, read only: 19 02 <mask> alone, the fault codes; never 14, clearing them)
+const READ = Object.freeze({ 0x22: 'ReadDataByIdentifier', 0x01: 'OBD current data', 0x06: 'OBD on-board monitoring', 0x09: 'OBD vehicle information',
+    0x19: 'ReadDTCInformation (02 by status mask only)' });
+const DTC_BY_MASK = 0x02;             // the one 19 sub-function let through
 const MAX_DIDS = 8;                   // identifiers in one 22 request
 const DISCOVER = Object.freeze([0xF1, 0x50]);
 const LINKS = new WeakMap();          // ReadOnlyDiag -> its Diag, out of reach of the app
@@ -48,10 +55,11 @@ function check(target, sid, data, functional) {
     if (!byte(sid) || !READ[sid]) throw new Error('read-only: service ' + show(sid) + ' is not allowed');
     if (!byte(target)) throw new Error('read-only: bad address ' + show(target));
     if (sid === 0x22 && (data.length < 2 || data.length > 2 * MAX_DIDS || data.length % 2)) throw new Error('read-only: 22 takes 1 to ' + MAX_DIDS + ' identifiers');
-    if (sid !== 0x22 && data.length !== 1) throw new Error('read-only: ' + show(sid) + ' takes exactly one PID');
+    if (sid === 0x19 && (data[0] !== DTC_BY_MASK || data.length !== 2)) throw new Error('read-only: 19 ' + (data.length ? show(data[0]) : '') + ' is not allowed, only 19 02 <status mask>');
+    if (sid !== 0x22 && sid !== 0x19 && data.length !== 1) throw new Error('read-only: ' + show(sid) + ' takes exactly one PID');
     if (functional !== (target === ALL)) throw new Error('read-only: 0xDF only as a functional request');
-    if (functional && !(sid === 0x22 && data[0] === DISCOVER[0] && data[1] === DISCOVER[1])) {
-        throw new Error('read-only: only 22 F1 50 may go to all units');
+    if (functional && !(sid === 0x22 && data[0] === DISCOVER[0] && data[1] === DISCOVER[1]) && sid !== 0x19) {
+        throw new Error('read-only: only 22 F1 50 and 19 02 <mask> may go to all units');
     }
 }
 
@@ -143,6 +151,27 @@ class ReadOnlyDiag {
             replies.forEach((u, addr) => {
                 out.set(addr, u[0] === 0x62 && u[1] === 0xF1 && u[2] === 0x50 && u.length >= 6 ? hex(((u[3] << 16) | (u[4] << 8) | u[5]) >>> 0, 6) : '');
             });
+            this.stats.replies += out.size;
+            return out;
+        });
+    }
+
+    /**
+     * (ACR: fault codes, read only) 19 02 <mask> to all units: Map(address -> the unit's reply bytes, 59 02 <mask>
+     * <code x3, status>... or a refusal 7F 19 ..; kit/diag.js parseDtcReply(uds, [0x02, mask]) reads it).
+     * opts.mask: the status mask (default 0x0C: pending and confirmed); idleMs / maxMs / onReply as discover().
+     */
+    scanDtcs(opts) {
+        const mask = opts && opts.mask !== undefined ? opts.mask : 0x0C;
+        const d = [DTC_BY_MASK, mask];
+        try { check(ALL, 0x19, d, true); } catch (e) { return this.blocked(e); }
+        const o = Object.assign({ idleMs: 3000, maxMs: 20000 }, opts);
+        delete o.mask;
+        return this.queue(async () => {
+            this.stats.sent++;
+            const replies = await LINKS.get(this).functional(0x19, d.slice(), o);
+            const out = new Map();
+            replies.forEach((u, addr) => out.set(addr, Array.from(u)));
             this.stats.replies += out.size;
             return out;
         });

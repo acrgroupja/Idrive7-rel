@@ -2,7 +2,7 @@
   "id": "acrja_performance",
   "title": "ACR Performance",
   "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes; experimental: xDrive off until the ignition cycle (behind its own setting)",
-  "version": "0.13.15",
+  "version": "0.13.16",
   "vendor": "ACR Automobile",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -53,6 +53,20 @@
     "de.bmw.infrastructure.VehicleCondition": {
       "_optional": "xDrive page: ignition on / READY (the DSC's conditions)",
       "VehicleCondition": "s"
+    },
+    "de.bmw.infotainment.vehicle.Vehicle": {
+      "_optional": "the car's display units; tyre pressures / temperatures are then guessed from their values",
+      "statusNewCurrentUnitsStatusExt": "rs"
+    },
+    "de.bmw.infotainment.vehicle.TPMS": {
+      "_optional": "tyre pressures and temperatures (tyre tiles)",
+      "statusTyrePressure": "rs",
+      "statusTyreTemperature": "rs"
+    },
+    "de.bmw.infotainment.KombiInterface_2": {
+      "_optional": "service requirements (Check page > Car health > Service)",
+      "cbsDataServiceList": "rs",
+      "cbsDataSBA": "rs"
     }
   },
   "screens": [
@@ -520,6 +534,86 @@
       "label": "Log demo data too",
       "type": "bool",
       "default": false
+    },
+    {
+      "key": "plugKm",
+      "label": "Spark plug interval (tuned)",
+      "type": "number",
+      "unit": "km",
+      "default": 30000,
+      "steps": [
+        20000,
+        25000,
+        30000,
+        40000,
+        50000,
+        60000
+      ]
+    },
+    {
+      "key": "valetKmh",
+      "label": "Valet mode: speed limit",
+      "type": "number",
+      "unit": "km/h",
+      "default": 80,
+      "steps": [
+        50,
+        60,
+        70,
+        80,
+        90,
+        100,
+        110,
+        120
+      ]
+    },
+    {
+      "key": "valetRpm",
+      "label": "Valet mode: rpm limit",
+      "type": "number",
+      "unit": "rpm",
+      "default": 4000,
+      "steps": [
+        3000,
+        3500,
+        4000,
+        4500,
+        5000
+      ]
+    },
+    {
+      "key": "valetMap",
+      "label": "Valet mode: tune map",
+      "type": "choice",
+      "default": 1,
+      "options": [
+        [
+          1,
+          "Map 1"
+        ],
+        [
+          2,
+          "Map 2"
+        ],
+        [
+          3,
+          "Map 3"
+        ],
+        [
+          4,
+          "Map 4"
+        ],
+        [
+          "keep",
+          "Leave as it is"
+        ]
+      ],
+      "when": {
+        "tuner": [
+          "bm3",
+          "mhd"
+        ]
+      }
     },
     {
       "key": "theme",
