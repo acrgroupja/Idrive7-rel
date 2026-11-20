@@ -90,8 +90,13 @@ class GearGuess {
 }
 
 class Car {
-    constructor(ctx, groups, extra) {
-        this.ctx = ctx; this.log = ctx.log;
+    /**
+     * (ACR) opts.pollMs: each signal's value asked again this often (getValue) besides its notifications, so a
+     * subscription the head unit lost (after it slept, the app kept running) can't leave a value standing for good;
+     * car.forget(keys): drop values, e.g. those from before the head unit slept, until they come again.
+     */
+    constructor(ctx, groups, extra, opts) {
+        this.ctx = ctx; this.log = ctx.log; this.opts = opts || {};
         const over = (ctx.spec.config && ctx.spec.config.scaling) || {};
         this.S = Object.assign({}, SCALE, over);
         this.live = {}; this.lastCar = 0; this.listeners = [];
@@ -151,8 +156,8 @@ class Car {
         // a while" doesn't mean "no car": once a signal's provider is there, stay on live data
         this.subs = [];
         this.t0 = Date.now();
-        Object.keys(watches).forEach((iface) => ctx.signals.watch(iface, '1', watches[iface], this.log)
-            .then((s) => { this.subs.push(s); this.log.info('signal ' + iface.split('.').pop() + (s.error ? ' error: ' + s.error : ' subscribed')); }));
+        this._watches = watches;
+        this._subscribe();
 
         // demo feed (20 Hz) - also keeps the sim warm so switching is seamless. On a busy or
         // slow CPU the timer fires late; replay every missed 50 ms step (up to 3 s) with its own
@@ -170,6 +175,20 @@ class Car {
             }
         }, 50);
     }
+
+    _subscribe() {
+        const ctx = this.ctx, watches = this._watches;
+        Object.keys(watches).forEach((iface) => ctx.signals.watch(iface, '1', watches[iface], this.log, this.opts.pollMs ? { pollMs: this.opts.pollMs } : undefined)
+            .then((s) => { this.subs.push(s); this.log.info('signal ' + iface.split('.').pop() + (s.error ? ' error: ' + s.error : ' subscribed')); }));
+    }
+    /** (ACR) Every signal subscribed again (new proxies; the old ones shut down): after the head unit slept. */
+    resubscribe() {
+        const old = this.subs; this.subs = [];
+        old.forEach((s) => { try { s.shutdown(); } catch (e) { /* gone */ } });
+        this._subscribe();
+    }
+    /** (ACR) Drop these values until the car sends them again. */
+    forget(keys) { (keys || []).forEach((k) => { delete this.live[k]; }); }
 
     /** Has the car answered: a value arrived, or a signal's provider is available. */
     carPresent() { return this.lastCar > 0 || this.subs.some((s) => s.available); }
