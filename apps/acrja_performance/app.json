@@ -1,9 +1,9 @@
 {
   "id": "acrja_performance",
   "title": "ACR Performance",
-  "description": "Live gauges, drag timing and dyno pulls with the engine unit's boost, rail pressure, AFR, knock and misfires, and a CSV data logger; engine map switching for BM3 or MHD tunes; experimental: xDrive off until the ignition cycle (behind its own setting)",
-  "version": "0.13.17",
-  "vendor": "ACR Automobile",
+  "description": "ACR Automobile's performance app for tuned BMWs with iDrive 7 or iDrive 8. Live gauges you lay out yourself, with the engine's boost, fuel pressure, AFR, knock and misfires. Drag times from 60 ft to the 1/4 mile, and dyno pulls you can compare map against map. Switch BM3 or MHD maps from the screen. Car health keeps an eye on the engine: fault codes, service and spark plugs, how each map treats the engine, and a health report you can save or share. Valet mode locks the car to safe limits with a PIN and records the drive. Includes a data logger with USB export. Activated per car by ACR Automobile Ja. Ltd.",
+  "version": "0.13.18",
+  "vendor": "ACR Automobile Ja. Ltd.",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
   "autostart": true,
