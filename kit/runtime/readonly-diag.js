@@ -9,6 +9,7 @@
  *   0x22 F1 50      the same to all units at once (functional 0xDF): which units are there,
  *                   and their SGBD index (what BMW's diagnostic tools identify a unit by)
  *   0x01 / 0x09     OBD-II current data / vehicle information, one PID, to one unit
+ *   0x06            OBD-II on-board monitoring test results, one monitor id, to one unit (ACR: misfire counts)
  *
  * Anything else throws before it reaches the transport: sessions (10), resets (11), clearing
  * faults (14), security access (27), communication control (28), dynamic identifiers (2C),
@@ -32,7 +33,8 @@
  */
 const { Diag, hex, NRC, ALL } = require('./diag');
 
-const READ = Object.freeze({ 0x22: 'ReadDataByIdentifier', 0x01: 'OBD current data', 0x09: 'OBD vehicle information' });
+// (ACR: 0x06 added, read only: an S63's misfire counts are only in its second engine unit's monitor results)
+const READ = Object.freeze({ 0x22: 'ReadDataByIdentifier', 0x01: 'OBD current data', 0x06: 'OBD on-board monitoring', 0x09: 'OBD vehicle information' });
 const MAX_DIDS = 8;                   // identifiers in one 22 request
 const DISCOVER = Object.freeze([0xF1, 0x50]);
 const LINKS = new WeakMap();          // ReadOnlyDiag -> its Diag, out of reach of the app
