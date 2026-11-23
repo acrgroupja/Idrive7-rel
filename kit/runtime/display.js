@@ -301,6 +301,7 @@ class Display {
         const sh = this.sheet;
         this.sheet = null; this.sheetTargets = null; this.sheetHead = false;
         if (this.sheetTimer) { clearInterval(this.sheetTimer); this.sheetTimer = null; }
+        if (this.sheetWake) { clearTimeout(this.sheetWake); this.sheetWake = null; }
         if (this.saved) { this.app = this.saved; this.saved = null; }
         this.lastWords = null;
         this._repaint();
@@ -325,6 +326,11 @@ class Display {
         let targets = [];
         try { targets = this.sheet.draw(r, this.theme()) || []; } catch (e) { this.log.error('sheet draw', e); }
         this.sheetTargets = targets;
+        // ACR: a sheet with a change due before the next 33 ms tick (Practice's tree lights: sheet.wakeAt() -> ms) is
+        // painted again at that moment, so a light shows when it is due, not up to a tick late
+        if (this.sheetWake) { clearTimeout(this.sheetWake); this.sheetWake = null; }
+        const wake = this.sheet && typeof this.sheet.wakeAt === 'function' ? this.sheet.wakeAt() : null, wn = Date.now();
+        if (typeof wake === 'number' && wake > wn && wake - wn < 40) this.sheetWake = setTimeout(() => { this.sheetWake = null; this._paintSheet(); }, wake - wn);
         // the header keeps the app's tabs (Settings lit for the settings): a tab leaves the sheet for that page
         this.app = {
             name: L.name, softImage: L.softImage, w: r.w, h: r.h, textScale: sc, words: new Uint32Array(r.words()),
