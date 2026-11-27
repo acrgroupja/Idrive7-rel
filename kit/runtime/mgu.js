@@ -24,8 +24,12 @@ const { OnlineApp, logging } = require('oap-sdk');
 const themes = require('./themes');
 const { Display } = require('./display');
 const { HmiText } = require('./hmi-text');
+const { getLanguage } = require('./i18n');
 const { listSheet } = require('./sheet');
 const { qrLogSheet } = require('./qrlog');
+const { SafeBoot, settingNamed } = require('./safeboot');
+const { Panic } = require('./panic');
+const kitpages = require('./kitpages');
 
 const sdkLog = logging.getSDKLogger();
 const SPEC = JSON.parse(fs.readFileSync(path.join(__dirname, 'app-spec.json'), 'utf8'));
@@ -115,8 +119,9 @@ const log = {};
     };
 });
 
-// crashes otherwise only reach DLT; keep the reason next to the app's log
-process.on('uncaughtException', (e) => { fileLog('FATAL', 'uncaught: ' + (e && e.stack || e)); process.exit(1); });
+// crashes otherwise only reach DLT; keep the reason next to the app's log (and with the start marker: safeboot.js)
+let safeBoot = null;
+process.on('uncaughtException', (e) => { fileLog('FATAL', 'uncaught: ' + (e && e.stack || e)); if (safeBoot) safeBoot.fail(e); process.exit(1); });
 process.on('exit', (code) => fileLog(code ? 'FATAL' : 'INFO', 'exit code ' + code + ' rss=' + Math.round(process.memoryUsage().rss / 1048576) + 'MB'));
 
 /* ---------------- settings (persisted in data/settings.json) ---------------- */
@@ -131,12 +136,20 @@ class Settings {
         fs.renameSync(tmp, file);
     }
 
-    constructor(schema) {
+    /**
+     * opts.memoryOnly (safe mode): the defaults in memory only, the saved file neither read nor written (it stays as
+     * it is for the next normal start).
+     */
+    constructor(schema, opts) {
         this.schema = schema || [];
         this.file = path.join(DATA_DIR, 'settings.json');
+        // the settings as they were before each change, newest first (Settings history, a change undone in one tap)
+        this.histFile = path.join(DATA_DIR, 'settings-history.json');
+        this.memoryOnly = !!(opts && opts.memoryOnly);
         this.values = {};
         this.listeners = [];
         for (const s of this.schema) this.values[s.key] = s.default;
+        if (this.memoryOnly) return;
         try { Object.assign(this.values, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch (e) {}
         // "aliases": { old value: new value } - a value saved before the setting's values were renamed
         for (const s of this.schema) {
@@ -162,10 +175,74 @@ class Settings {
         if (changed && fs.existsSync(this.file)) try { Settings.writeWhole(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { /* read-only */ }
     }
     get(key) { return this.values[key]; }
-    set(key, value) {
+    /** Leave memory-only (safe mode, started normally again): the saved settings back. */
+    load() {
+        this.memoryOnly = false;
+        try { Object.assign(this.values, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch (e) {}
+    }
+    /**
+     * by: who made the change, for Settings history: 'user' (a settings screen), 'app' (the app itself, e.g. a value
+     * it learned; the default), 'rollback', 'reset' or 'safe'. The settings as they were go to the history first.
+     */
+    set(key, value, by) {
+        const from = this.values[key];
+        if (from !== value) this._remember([{ key, from, to: value }], by || 'app');
         this.values[key] = value;
-        try { Settings.writeWhole(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { log.warn('settings save: ' + e); }
+        this._save();
         this.listeners.forEach((fn) => { try { fn(key, value); } catch (e) { log.error(e); } });
+    }
+    _save() {
+        if (this.memoryOnly) return;
+        try { Settings.writeWhole(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { log.warn('settings save: ' + e); }
+    }
+    /**
+     * The settings before each change, newest first, at most 10: { at, by, changes: [{ key, from, to }], before }.
+     * The app changing the same setting again within 10 minutes stays one entry (a learned value would else push
+     * the user's own changes out).
+     */
+    history() {
+        if (this._hist) return this._hist;
+        try { this._hist = JSON.parse(fs.readFileSync(this.histFile, 'utf8')); } catch (e) { this._hist = []; }
+        if (!Array.isArray(this._hist)) this._hist = [];
+        return this._hist;
+    }
+    _remember(changes, by) {
+        if (this.memoryOnly) return;
+        const h = this.history(), now = Date.now(), last = h[0];
+        const one = changes.length === 1 && changes[0].key;
+        if (by === 'app' && one && last && last.by === 'app' && last.changes.length === 1 && last.changes[0].key === one && now - last.at < 600000) {
+            last.changes[0].to = changes[0].to;     // (its "from" and "before" stay those of the first change)
+            last.at = now;
+        } else {
+            h.unshift({ at: now, by, changes, before: JSON.parse(JSON.stringify(this.values)) });
+            h.splice(10);
+        }
+        try { Settings.writeWhole(this.histFile, JSON.stringify(h)); } catch (e) { log.warn('settings history: ' + e); }
+    }
+    /** Every setting to `values` at once (a rollback, a reset), the settings before it kept in the history first. */
+    _replace(values, by) {
+        const keys = {};
+        Object.keys(this.values).concat(Object.keys(values)).forEach((k) => { if (k.charAt(0) !== '_') keys[k] = 1; });
+        const changes = Object.keys(keys).filter((k) => JSON.stringify(this.values[k]) !== JSON.stringify(values[k]))
+            .map((k) => ({ key: k, from: this.values[k], to: values[k] }));
+        if (!changes.length) return changes;
+        this._remember(changes, by);
+        this.values = JSON.parse(JSON.stringify(values));
+        this._save();
+        changes.forEach((c) => this.listeners.forEach((fn) => { try { fn(c.key, this.values[c.key]); } catch (e) { log.error(e); } }));
+        return changes;
+    }
+    /** Back to the settings as they were before history entry i (itself kept, so it can be undone). */
+    restore(i) {
+        const e = this.history()[i];
+        return e ? this._replace(e.before, 'rollback') : [];
+    }
+    /** Every setting to its default (the kit's own marks kept). */
+    resetDefaults(by) {
+        const v = {};
+        Object.keys(this.values).forEach((k) => { if (k.charAt(0) === '_') v[k] = this.values[k]; });
+        this.schema.forEach((s) => { v[s.key] = s.default; });
+        return this._replace(v, by || 'reset');
     }
     onChange(fn) { this.listeners.push(fn); }
     item(key) { return this.schema.find((s) => s.key === key); }
@@ -201,14 +278,14 @@ class Settings {
         return String(v);
     }
     /** Advance a choice/number setting to its next value (wraps). */
-    cycle(key) {
+    cycle(key, by) {
         const s = this.item(key);
         if (!s) return;
-        if (s.type === 'bool') return this.set(key, !this.values[key]);
+        if (s.type === 'bool') return this.set(key, !this.values[key], by);
         const list = s.type === 'choice' ? s.options.map((o) => o[0]) : (s.steps || []);
         if (!list.length) return;
         const i = list.indexOf(this.values[key]);
-        this.set(key, list[(i + 1) % list.length]);
+        this.set(key, list[(i + 1) % list.length], by);
     }
 }
 
@@ -418,6 +495,7 @@ function patchStartWidgetEvents(app) {
 class Widget {
     constructor(spec) {
         this.spec = spec || {};
+        this.widgetHmiText = getLanguage() === 'zh-CN' ? new HmiText() : null;
         this.comp = null;
         this.vis = Object.create(null);      // spawnId -> visible (unknown = true)
         this._img = Object.create(null);
@@ -473,7 +551,13 @@ class Widget {
     }
     set(spawnId, cell, value, type) {
         if (!this.comp) return Promise.resolve();
-        if ((type || 'Text') === 'Text') value = widgetText(value);
+        if ((type || 'Text') === 'Text') {
+            if (this.widgetHmiText) {
+                return Promise.resolve(this.widgetHmiText.set(this.comp, 'widget', Number(spawnId), cell, value))
+                    .catch((e) => log.warn('widget ' + cell + ': ' + e));
+            }
+            value = widgetText(value);
+        }
         return Promise.resolve(this.comp.setValue(Number(spawnId), cell, value, type || 'Text'))
             .catch((e) => log.warn('widget ' + cell + ': ' + e));
     }
@@ -557,9 +641,9 @@ function wireSettings(ctx) {
             // the chosen row of the drop-down (the HMI shows the selection itself)
             ui.onClick(comp, (ev) => {
                 const v = values(s)[ev && ev.row];
-                if (v !== undefined && v !== settings.get(s.key)) settings.set(s.key, v);
+                if (v !== undefined && v !== settings.get(s.key)) settings.set(s.key, v, 'user');
             });
-        } else ui.onClick(comp, () => { settings.cycle(s.key); return refresh(); });
+        } else ui.onClick(comp, () => { settings.cycle(s.key, 'user'); return refresh(); });
     });
     // Settings: drawn over the page by the renderer (sheet.js) where the kit runs the screen,
     // else the HMI's settings screen. The HMI's screen shows the values chosen in either.
@@ -570,7 +654,9 @@ function wireSettings(ctx) {
             if (d.sheet && d.sheet.settings) { d.closeSheet(); return null; }
             // every app's last row: its log as QR codes (qrlog.js), for an issue sent without SSH
             const qrRow = { label: 'QR log', value: 'The app\'s log as codes to photograph', open: () => qrLogSheet({ file: LOG_FILE, app: SPEC.id, version: SPEC.version }) };
-            const sh = listSheet(settings, null, { version: SPEC.version, extra: () => settingsRows.concat([qrRow]) });
+            // (the kit's own rows: Stop all at the top, Settings history before the QR log; ctx.kitFirstRows / kitRows)
+            const sh = listSheet(settings, null, { version: SPEC.version, first: ctx.kitFirstRows,
+                extra: () => settingsRows.concat(ctx.kitRows ? ctx.kitRows() : [], [qrRow]) });
             sh.settings = true;
             sh.onClose = () => refresh();
             if (d.openSheet(sh)) return null;
@@ -597,7 +683,9 @@ async function run(impl) {
 }
 async function runInner(impl) {
     const app = new OnlineApp();
-    log.info('starting ' + SPEC.id + ' ' + SPEC.version);
+    // start-up timing (#240): ms since Node started, on the lines that say where a start spends its time
+    const upMs = () => Math.round(process.uptime() * 1000);
+    log.info('starting ' + SPEC.id + ' ' + SPEC.version + ' (node up ' + upMs() + ' ms)');
     // interfaces this unit lacks, which the installer left out (app.json "_optional")
     try {
         const missing = JSON.parse(fs.readFileSync(path.join(__dirname, 'missing-interfaces.json'), 'utf8'));
@@ -607,9 +695,10 @@ async function runInner(impl) {
     // status channel is up (otherwise MainApp stops the app right after start),
     // report HMI visibility, and exit when MainApp asks us to shut down
     const active = () => Promise.resolve().then(() => app.registerActive())
-        .then(() => log.info('registered active')).catch((e) => log.warn('registerActive: ' + e));
+        .then(() => log.info('registered active (' + upMs() + ' ms)')).catch((e) => log.warn('registerActive: ' + e));
     app.on('appStatusProxyReady', active);
-    app.on('shutdown', () => { log.info('shutdown requested by MainApp'); setTimeout(() => process.exit(0), 200); });
+    // (a stop MainApp asked for is no failed start for safe boot: CONFIG_STATE starts and quick sleeps end this way)
+    app.on('shutdown', () => { log.info('shutdown requested by MainApp'); if (safeBoot) safeBoot.stopped(); setTimeout(() => process.exit(0), 200); });
     // home-screen widget: MainApp hands it over (now or whenever one is placed)
     const widget = new Widget(SPEC.startWidget);
     if (SPEC.startWidget) {
@@ -618,16 +707,40 @@ async function runInner(impl) {
     }
     await app.start();
     active();
-    const settings = new Settings(SPEC.settings);
+    // safe boot (safeboot.js): two failed starts in a row and this one is safe mode: no background work, the
+    // settings' defaults in memory only, a page saying what failed
+    safeBoot = new SafeBoot(DATA_DIR);
+    const boot = safeBoot.begin();
+    if (boot.safe) log.warn('safe mode: ' + boot.fails + ' failed starts in a row, the last ' + (boot.last && boot.last.step) + ': ' + (boot.last && boot.last.error));
+    const settings = new Settings(SPEC.settings, { memoryOnly: boot.safe });
+    // Stop all (panic.js): every app's work on the car stopped and given back, from any app's settings
+    const panic = new Panic(SPEC.id), panicFns = [];
+    const onPanic = (fn) => {
+        panicFns.push(fn);
+        if (panic.on) { try { fn(true, panic.by); } catch (e) { log.error('stop all', e); } }
+    };
+    panic.watch((on, by) => {
+        log.warn(on ? 'Stop all (from ' + by + '): stopping' : 'Stop all ended (' + by + '): going on');
+        panicFns.forEach((fn) => { try { fn(on, by); } catch (e) { log.error('stop all', e); } });
+    });
+    // the start got through: its start done (or the background running) and 30 s up without a crash
+    const startedOk = () => { const t = setTimeout(() => { if (safeBoot.ok()) log.info('safe boot: start ok'); }, Number(process.env.MGU_SAFE_OK_MS) || 30000); if (t.unref) t.unref(); };
     // impl.background(bg): what the app does with or without its screens (app.json "autostart": true, an app the
-    // platform starts by itself); bg = { app, log, settings, signals, spec, dataDir }. What it returns is
+    // platform starts by itself); bg = { app, log, settings, signals, spec, dataDir, onPanic }. What it returns is
     // ctx.background for impl.start.
     let background = null;
-    if (impl && impl.background) {
+    const runBackground = async () => {
+        if (!(impl && impl.background)) return;
+        safeBoot.step('background');
         try {
-            background = await impl.background({ app, log, settings, signals: require('./signals'), spec: SPEC, dataDir: DATA_DIR });
-        } catch (e) { log.error('background start: ' + (e && e.stack || e)); }
-        if (!app.rhmiApplication) { log.info('no screens for this start: running in the background'); return; }
+            background = await impl.background({ app, log, settings, signals: require('./signals'), spec: SPEC, dataDir: DATA_DIR, onPanic });
+        } catch (e) { safeBoot.fail(e); log.error('background start: ' + (e && e.stack || e)); }
+    };
+    if (!boot.safe) await runBackground();
+    if (impl && impl.background && !app.rhmiApplication) {
+        log.info('no screens for this start: running in the background');
+        if (!boot.safe) startedOk();
+        return;
     }
     if (!app.rhmiApplication) {
         // The SDK did not create the app's screens: nothing can be shown. Stay up (idle) rather than throw: a
@@ -638,12 +751,21 @@ async function runInner(impl) {
             '(see the SDK_ lines above). Idle until MainApp stops it.');
         return;
     }
+    // resolved by the app's first ctx.loop: it can draw its page (startApp)
+    let canDraw = null;
+    const drawReady = new Promise((res) => { canDraw = res; });
     const ui = new Ui(app);
     const display = new Display(ui, log, SPEC, settings, () => themes.theme(settings.get('theme')));
     ui.display = display;
     const ctx = {
         app, ui, settings, log, spec: SPEC, dataDir: DATA_DIR, display, widget, background,
         signals: require('./signals'),
+        /**
+         * onPanic(fn): fn(true, by) when Stop all is pressed in any app (at once if it is on already), fn(false) when
+         * it ends. An app that sends anything to the car stops it there and gives the car back as its own stop does,
+         * and sends nothing more until fn(false).
+         */
+        onPanic,
         theme: () => themes.theme(settings.get('theme')),
         /**
          * controller.grab(true): the iDrive controller's knob, press and tilt go to this app only
@@ -697,6 +819,7 @@ async function runInner(impl) {
          * when the GPU renderer shows it, else about `fps` times a second.
          */
         loop(stateName, fps, fn) {
+            canDraw();
             let timer = null, on = false, running = false, frames = 0, spent = 0;
             const gpuOn = () => display.active(stateName);
             const tick = async () => {
@@ -747,6 +870,21 @@ async function runInner(impl) {
         },
     };
 
+    // the kit's own settings rows: Stop all at the top, Settings history at the bottom (kitpages.js; the emulator's
+    // hu-stub.js makes the same rows)
+    // (in safe mode the history is the saved settings', not the defaults in memory)
+    let disk = null;
+    const saved = () => (boot.safe ? disk || (disk = new Settings(SPEC.settings)) : settings);
+    const kr = kitpages.kitRows({ panic, saved });
+    ctx.kitFirstRows = kr.first;
+    ctx.kitRows = kr.rows;
+    // the red Stop all strip over every frame while it is on (tap: resume)
+    const image = ui.image.bind(ui);
+    ui.image = (name, cv, cell) => {
+        if (panic.on && cv && typeof cv.roundRect === 'function') kitpages.banner(cv, ctx.theme(), { by: panic.by, resume: () => panic.set(false) });
+        return image(name, cv, cell);
+    };
+
     // a separate SETTINGS state exists only when no menu screen shows the settings itself
     // ("settings": true, as in Doom: kit/tools/build.py builds no SETTINGS state then)
     const settingsScreen = !!(SPEC.settings && SPEC.settings.length) && !(SPEC.screens || []).some((s) => s.settings === true);
@@ -783,17 +921,22 @@ async function runInner(impl) {
         entryUuids = ((appDesc.application && appDesc.application.entryPoints) || []).map((e) => e.uuid);
     } catch (e) { log.warn('no rhmiData/application.json: ' + e); }
     const mainState = ui.comp(mainName);
+    // (asked now, not waited for: the screens and the app start go on meanwhile, a tap waits for its own)
     const mapped = {};
-    await Promise.all(entryUuids.map((uuid) => ui.rhmi.mapEntryState(uuid, mainState)
-        .then(() => { mapped[uuid] = true; log.info('mapped entry ' + uuid + ' -> ' + mainName); })
-        .catch((e) => log.error('map entry state', e))));
+    entryUuids.forEach((uuid) => {
+        mapped[uuid] = ui.rhmi.mapEntryState(uuid, mainState)
+            .then(() => { mapped[uuid] = true; log.info('mapped entry ' + uuid + ' -> ' + mainName + ' (' + upMs() + ' ms)'); })
+            .catch((e) => { mapped[uuid] = false; log.error('map entry state', e); });
+    });
     let opening = null;
     // tries: right after a tap started the app the HMI can still refuse the state (INVALID_UUID /
     // INVALID_COMPONENTID) - then it is asked again, 0.8 s apart, instead of needing a second tap
     const openEntry = (uuid, tries) => {
         if (opening) return opening;   // MainApp can send the same tap twice
         let again = false;
-        const map = mapped[uuid] ? Promise.resolve() : ui.rhmi.mapEntryState(uuid, mainState).then(() => { mapped[uuid] = true; });
+        const m = mapped[uuid];
+        const map = m === true ? Promise.resolve() : m && m.then ? m.then(() => (mapped[uuid] === true ? null : ui.rhmi.mapEntryState(uuid, mainState).then(() => { mapped[uuid] = true; })))
+            : ui.rhmi.mapEntryState(uuid, mainState).then(() => { mapped[uuid] = true; });
         opening = map
             .then(() => (mainState && mainState.updateResources ? mainState.updateResources().catch(() => {}) : null))
             .then(() => ui.rhmi.openEntryState(uuid))
@@ -815,12 +958,46 @@ async function runInner(impl) {
         openEntry(uuid);
     });
 
+    // safe mode: the kit's page in the app's place (the first canvas screen), its actions also at the settings' top
+    function startSafe() {
+        const scr = (SPEC.screens || []).find((x) => x.kind === 'canvas');
+        let on = true;
+        const sheet = kitpages.safeSheet({
+            title: SPEC.title || SPEC.id, fails: boot.fails, last: boot.last,
+            setting: boot.last && settingNamed(boot.last.error, SPEC.settings),
+            tryAgain: async () => {
+                log.info('safe mode: started normally again by the user');
+                on = false;
+                safeBoot.retry();
+                settings.load();
+                await runBackground();
+                await startApp();
+                startedOk();
+            },
+            reset: () => saved().resetDefaults('safe').length,
+            qr: () => qrLogSheet({ file: LOG_FILE, app: SPEC.id, version: SPEC.version }),
+        });
+        const first = ctx.kitFirstRows;
+        ctx.kitFirstRows = () => (on ? [
+            { label: 'Safe mode: Try normal start again', color: '#2fd27a', value: '', open: () => { sheet.focus = 0; sheet.press(); return null; } },
+        ] : []).concat(first());
+        if (!scr) return;
+        ctx.loop(scr.name, 2, () => {
+            if (!on) return null;
+            const cv = ctx.canvas(1600, 520), t = ctx.theme();
+            const targets = sheet.draw(cv, t) || [];
+            kitpages.safeFrame(cv, t, SPEC.title || SPEC.id);
+            targets.forEach((q, i) => { if (cv.target) cv.target(q.x, q.y, q.w, q.h, () => q.act(), 'kit-safe-' + i, 12); });
+            return ui.image(scr.graphic || scr.name + '_GFX', cv);
+        });
+    }
+
     // never let a UI call that the HMI does not answer block the app start:
     // MainApp shows "loading app" until initialized() is called
     const step = (what, p, ms) => {
         let timer;
         return Promise.race([
-            Promise.resolve(p).then(() => log.info(what + ' done')),
+            Promise.resolve(p).then(() => log.info(what + ' done (' + upMs() + ' ms)')),
             new Promise((res) => { timer = setTimeout(() => { log.warn(what + ' still pending after ' + ms + ' ms, continuing'); res(); }, ms); }),
         ]).catch((e) => log.error(what, e)).then(() => clearTimeout(timer));
     };
@@ -834,9 +1011,21 @@ async function runInner(impl) {
         .map((s) => ui.comp(s.name)).filter((st) => st && st.updateResources)
         .map((st) => st.updateResources())), 4000);
     await step('settings screen', wireSettings(ctx), 3000);
-    if (impl && impl.start) await step('app start', Promise.resolve().then(() => impl.start(ctx)), 5000);
+    // MainApp shows "Loading app" until initialized(): an app that can draw (its first ctx.loop) is ready for it then,
+    // what its start still waits for (a car's units found, a first read) goes on while its page shows (#240)
+    const startApp = () => {
+        safeBoot.step('start');
+        if (!(impl && impl.start)) return null;
+        const started = Promise.resolve().then(() => impl.start(ctx)).catch((e) => { safeBoot.fail(e); throw e; });
+        const drawable = drawReady.then(() => new Promise((res) => setTimeout(res, 0)))
+            .then(() => log.info('app can draw (' + upMs() + ' ms): ready, its start goes on'));
+        started.then(() => log.info('app start done (' + upMs() + ' ms)'), (e) => log.error('app start', e));
+        return step('app start (until it can draw)', Promise.race([started.catch(() => {}), drawable]), 5000);
+    };
+    if (boot.safe) startSafe();
+    else { await startApp(); startedOk(); }
     await app.initialized();
-    log.info('initialized (start reason ' + app.startReason + ')');
+    log.info('initialized (start reason ' + app.startReason + ', ' + upMs() + ' ms)');
     // launched by a tile tap / bookmark: the execute event came before we
     // listened, so open the screen ourselves (M Laptimer does the same)
     const lastEntry = app.getLastExecutedEntryPointUuid && app.getLastExecutedEntryPointUuid();

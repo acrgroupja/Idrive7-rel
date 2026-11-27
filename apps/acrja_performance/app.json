@@ -2,7 +2,7 @@
   "id": "acrja_performance",
   "title": "ACR Performance",
   "description": "ACR Automobile's performance app for tuned BMWs with iDrive 7 or iDrive 8. Live gauges you lay out yourself, with the engine's boost, fuel pressure, AFR, knock and misfires. Drag times from 60 ft to the 1/4 mile, and dyno pulls you can compare map against map. Switch BM3 or MHD maps from the screen. Car health keeps an eye on the engine: fault codes, service and spark plugs, how each map treats the engine, and a health report you can save or share. Valet mode locks the car to safe limits with a PIN and records the drive. Includes a data logger with USB export. Activated per car by ACR Automobile.",
-  "version": "0.13.28",
+  "version": "0.13.29",
   "vendor": "acrgroupja",
   "loggingId": "OAB1",
   "iconGlyph": "gauge",
@@ -10,7 +10,8 @@
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
       "statusEngineSpeed2": "rs",
-      "statusEngineTemperature": "rs"
+      "statusEngineTemperature": "rs",
+      "statusBattery2": "rs"
     },
     "de.bmw.infotainment.vehicle.CDS2": {
       "statusLongitudinalAccelerationMassCenter": "rs",
@@ -270,6 +271,12 @@
       ]
     },
     {
+      "key": "coldZone",
+      "label": "Rpm gauge: faded yellow from the cold limit to the redline while the oil is cold",
+      "type": "bool",
+      "default": true
+    },
+    {
       "key": "stoich",
       "label": "Fuel (for AFR)",
       "type": "choice",
@@ -296,6 +303,108 @@
           "Auto · from the engine unit's ethanol reading (flex fuel)"
         ]
       ]
+    },
+    {
+      "key": "blendTarget",
+      "label": "Fuel quality > Blend: target ethanol",
+      "type": "number",
+      "unit": "%",
+      "default": 30,
+      "steps": [
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50,
+        60,
+        70,
+        85
+      ]
+    },
+    {
+      "key": "blendE85",
+      "label": "Fuel quality > Blend: ethanol in the station's E85",
+      "type": "number",
+      "unit": "%",
+      "default": 85,
+      "steps": [
+        50,
+        55,
+        60,
+        65,
+        70,
+        75,
+        80,
+        85,
+        90,
+        95,
+        100
+      ]
+    },
+    {
+      "key": "blendPump",
+      "label": "Fuel quality > Blend: ethanol in the pump fuel",
+      "type": "choice",
+      "default": "10",
+      "options": [
+        [
+          "0",
+          "None (E0)"
+        ],
+        [
+          "5",
+          "E5"
+        ],
+        [
+          "10",
+          "E10"
+        ],
+        [
+          "15",
+          "E15"
+        ]
+      ]
+    },
+    {
+      "key": "blendTank",
+      "label": "Fuel quality > Blend: fuel tank size",
+      "type": "number",
+      "unit": "l",
+      "default": 60,
+      "steps": [
+        40,
+        42,
+        45,
+        50,
+        52,
+        55,
+        57,
+        59,
+        60,
+        63,
+        65,
+        68,
+        70,
+        74,
+        78,
+        80,
+        83,
+        85,
+        90,
+        100
+      ]
+    },
+    {
+      "key": "blendNow",
+      "label": "Ethanol in the tank now (without the engine unit's reading)",
+      "type": "number",
+      "unit": "%",
+      "default": 10,
+      "hidden": true
     },
     {
       "key": "watchBy",
@@ -616,18 +725,102 @@
       "default": false
     },
     {
+      "key": "oilKm",
+      "label": "Engine oil interval (tuned)",
+      "type": "number",
+      "unit": "km",
+      "default": 7500,
+      "labels": {
+        "0": "Off"
+      },
+      "steps": [
+        0,
+        5000,
+        6000,
+        7500,
+        10000,
+        12000,
+        15000
+      ]
+    },
+    {
+      "key": "oilMonths",
+      "label": "Engine oil time limit (tuned)",
+      "type": "number",
+      "unit": "months",
+      "default": 12,
+      "labels": {
+        "0": "Off"
+      },
+      "steps": [
+        0,
+        6,
+        9,
+        12,
+        18,
+        24
+      ]
+    },
+    {
+      "key": "lastMinute",
+      "label": "Save the last minute on a knock or misfire warning (no log running)",
+      "type": "bool",
+      "default": false
+    },
+    {
       "key": "plugKm",
       "label": "Spark plug interval (tuned)",
       "type": "number",
       "unit": "km",
       "default": 30000,
+      "labels": {
+        "0": "Off"
+      },
       "steps": [
+        0,
         20000,
         25000,
         30000,
         40000,
         50000,
         60000
+      ]
+    },
+    {
+      "key": "gearboxKm",
+      "label": "Gearbox oil interval (tuned)",
+      "type": "number",
+      "unit": "km",
+      "default": 60000,
+      "labels": {
+        "0": "Off"
+      },
+      "steps": [
+        0,
+        30000,
+        40000,
+        50000,
+        60000,
+        80000,
+        100000
+      ]
+    },
+    {
+      "key": "brakeFluidMonths",
+      "label": "Brake fluid interval (tuned)",
+      "type": "number",
+      "unit": "months",
+      "default": 12,
+      "labels": {
+        "0": "Off"
+      },
+      "steps": [
+        0,
+        6,
+        12,
+        18,
+        24,
+        36
       ]
     },
     {
